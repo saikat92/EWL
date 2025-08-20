@@ -1,16 +1,16 @@
 // components/SidebarMenu.tsx
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
-    Linking,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TouchableOpacity,
-    View,
+  Animated,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
-
 
 interface SidebarMenuProps {
   isVisible: boolean;
@@ -18,16 +18,39 @@ interface SidebarMenuProps {
 }
 
 const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
-  if (!isVisible) return null;
+  const slideAnim = useRef(new Animated.Value(300)).current;
+
+  useEffect(() => {
+    if (isVisible) {
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(slideAnim, {
+        toValue: 300,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isVisible]);
 
   const handlePrivacyPolicy = () => {
     Linking.openURL('https://www.usa.canon.com/internet/portal/us/home/terms-of-use/privacy-policy');
   };
 
+  if (!isVisible) return null;
+
   return (
     <View style={styles.overlay}>
       <TouchableOpacity style={styles.overlayTouchable} onPress={onClose} />
-      <View style={styles.sidebar}>
+      <Animated.View 
+        style={[
+          styles.sidebar,
+          { transform: [{ translateX: slideAnim }] }
+        ]}
+      >
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Settings</Text>
           <TouchableOpacity onPress={onClose} style={styles.closeButton}>
@@ -115,7 +138,7 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
             <Text style={styles.footerText}>© KEI. 2022-2025</Text>
           </View>
         </ScrollView>
-      </View>
+      </Animated.View>
     </View>
   );
 };
