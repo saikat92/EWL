@@ -82,12 +82,13 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
             <Text style={styles.sectionTitle}>App settings</Text>
             <View style={styles.settingItem}>
               <Text>Name</Text>
-              <Text style={styles.settingValue}>RMP2108</Text>
+              <Text style={styles.settingValue}>ECPi</Text>
             </View>
             <View style={styles.settingItem}>
               <Text>Appearance mode</Text>
               <Text style={styles.settingValue}>Light</Text>
             </View>
+            
           </View>
 
           {/* Reset Section */}
@@ -100,9 +101,12 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
 
           {/* App Information Section */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>App information</Text>
+            <Text style={styles.sectionTitle}>Information/ Logs</Text>
             <TouchableOpacity style={styles.menuItem}>
               <Text>About this app</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem}>
+              <Text>System Log</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem}>
               <Text>License</Text>
