@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import { useEffect, useState } from 'react';
 import {
   Alert,
@@ -6,10 +7,10 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
+import { API } from '../gpioService';
 
 // Helper function to format time
 const formatTime = (seconds: number) => {
@@ -27,6 +28,8 @@ export default function ManualCleanScreen() {
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [showConfirmStop, setShowConfirmStop] = useState(false);
   const [rpmInputFocused, setRpmInputFocused] = useState(false);
+  const [conveyorOn, setConveyorOn] = useState(false);
+  const [conveyorTime, setConveyorTime] = useState(0);
 
   // Timer effects
   useEffect(() => {
@@ -45,6 +48,28 @@ export default function ManualCleanScreen() {
     return () => clearTimeout(timer);
   }, [uvOn, uvTime]);
 
+  // Add timer effect for conveyor
+useEffect(() => {
+  let timer: NodeJS.Timeout;
+  if (conveyorOn) {
+    timer = setTimeout(() => setConveyorTime(conveyorTime + 1), 1000);
+  }
+  return () => clearTimeout(timer);
+}, [conveyorOn, conveyorTime]);
+
+  // Update toggleConveyor function to call API
+    const toggleConveyor = async () => {
+      try {
+        const action = conveyorOn ? 'stop' : 'start';
+        await API.controlConveyor(action);
+        setConveyorOn(!conveyorOn);
+      } catch (error) {
+        Alert.alert('Error', 'Failed to control conveyor');
+        setConveyorOn(conveyorOn);
+      }
+    };
+
+
   const handleRpmChange = (text: string) => {
     // Only allow numbers
     const numericText = text.replace(/[^0-9]/g, '');
@@ -53,23 +78,40 @@ export default function ManualCleanScreen() {
     }
   };
 
-  const toggleMotor = () => {
+  const toggleMotor = async () => {
     if (motorRunning) {
       setShowConfirmStop(true);
     } else {
+      // For now, just toggle local state since speed control is design-only
       setMotorRunning(true);
     }
   };
 
-  const toggleUV = () => {
-    setUvOn(!uvOn);
+  // Update toggleUV function to call API
+  const toggleUV = async () => {
+    try {
+      const action = uvOn ? 'off' : 'on';
+      await API.controlUVLight(action);
+      setUvOn(!uvOn);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to control UV light');
+      // Revert UI state on error
+      setUvOn(uvOn);
+    }
   };
 
-  const handleEmergencyStop = () => {
-    setMotorRunning(false);
-    setUvOn(false);
-    setShowEmergencyModal(false);
-    Alert.alert("Emergency Stop", "All operations have been stopped.");
+  // Update emergency stop to call API
+  const handleEmergencyStop = async () => {
+    try {
+      await API.emergencyStop();
+      setMotorRunning(false);
+      setUvOn(false);
+      setConveyorOn(false);
+      setShowEmergencyModal(false);
+      Alert.alert("Emergency Stop", "All operations have been stopped.");
+    } catch (error) {
+      Alert.alert('Error', 'Failed to execute emergency stop');
+    }
   };
 
   return (
@@ -81,60 +123,7 @@ export default function ManualCleanScreen() {
         <Text style={styles.subtitle}>Full control over cleaning parameters</Text>
       </View>
 
-      {/* Motor Control Card */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
-          <Text style={styles.cardTitle}>Motor Control</Text>
-        </View>
-        
-        <View style={styles.controlRow}>
-          <Text style={styles.controlLabel}>Motor Speed (RPM)</Text>
-          <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
-        </View>
-        
-        {/* RPM Input Field */}
-        <View style={[styles.inputContainer, rpmInputFocused && styles.inputFocused]}>
-          <TextInput
-            style={styles.input}
-            value={motorSpeed}
-            onChangeText={handleRpmChange}
-            keyboardType="number-pad"
-            placeholder="10 - 1800"
-            onFocus={() => setRpmInputFocused(true)}
-            onBlur={() => setRpmInputFocused(false)}
-            editable={!motorRunning}
-          />
-          <Text style={styles.rpmUnit}>RPM</Text>
-        </View>
-        
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={[
-              styles.toggleButton,
-              motorRunning ? styles.toggleButtonOn : styles.toggleButtonOff,
-              motorRunning && { backgroundColor: '#2ecc71' }
-            ]}
-            onPress={toggleMotor}
-            disabled={showEmergencyModal}
-          >
-            <MaterialCommunityIcons 
-              name={motorRunning ? "motion-sensor" : "motion-off"} 
-              size={24} 
-              color="white" 
-            />
-            <Text style={styles.toggleButtonText}>
-              {motorRunning ? "RUNNING" : "START MOTOR"}
-            </Text>
-          </TouchableOpacity>
-          
-          <View style={styles.timerContainer}>
-            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
-            <Text style={styles.timerText}>{formatTime(motorTime)}</Text>
-          </View>
-        </View>
-      </View>
-
+     
       {/* UV Lamp Control Card */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -179,6 +168,124 @@ export default function ManualCleanScreen() {
           </View>
         </View>
       </View>
+
+      {/* Add Conveyor Control Card (after UV Lamp Control Card)*/}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <MaterialCommunityIcons name="conveyor-belt" size={24} color="#3498db" />
+          <Text style={styles.cardTitle}>Conveyor Control</Text>
+        </View>
+        
+        <View style={styles.uvStatus}>
+          <MaterialCommunityIcons 
+            name={conveyorOn ? "conveyor-belt" : "conveyor-belt-off"} 
+            size={40} 
+            color={conveyorOn ? "#2ecc71" : "#bdc3c7"} 
+          />
+          <Text style={[styles.uvStatusText, conveyorOn && { color: "#2ecc71" }]}>
+            {conveyorOn ? "CONVEYOR ACTIVE" : "CONVEYOR INACTIVE"}
+          </Text>
+        </View>
+        
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[
+              styles.toggleButton,
+              conveyorOn ? styles.toggleButtonOn : styles.toggleButtonOff,
+              conveyorOn && { backgroundColor: '#2ecc71' }
+            ]}
+            onPress={toggleConveyor}
+            disabled={showEmergencyModal}
+          >
+            <MaterialCommunityIcons 
+              name={conveyorOn ? "power-plug" : "power-plug-off"} 
+              size={24} 
+              color="white" 
+            />
+            <Text style={styles.toggleButtonText}>
+              {conveyorOn ? "TURN OFF" : "TURN ON"}
+            </Text>
+          </TouchableOpacity>
+          
+          <View style={styles.timerContainer}>
+            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
+            <Text style={styles.timerText}>{formatTime(conveyorTime)}</Text>
+          </View>
+        </View>
+      </View>
+
+       {/* Motor Control Card */}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
+          <Text style={styles.cardTitle}>Motor Control</Text>
+        </View>
+        
+        <View style={styles.controlRow}>
+          <Text style={styles.controlLabel}>Motor Speed (RPM)</Text>
+          <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
+        </View>
+        
+        {/* RPM Input Field */}
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
+            <Text style={styles.cardTitle}>Motor Speed Control</Text>
+          </View>
+          
+          <View style={styles.controlRow}>
+            <Text style={styles.controlLabel}>Motor Speed</Text>
+            <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
+          </View>
+          
+          {/* Replace TextInput with Slider */}
+          <View style={styles.sliderContainer}>
+            <Slider
+              style={styles.slider}
+              minimumValue={10}
+              maximumValue={1800}
+              step={1}
+              value={parseInt(motorSpeed)}
+              onValueChange={(value) => setMotorSpeed(value.toString())}
+              minimumTrackTintColor="#3498db"
+              maximumTrackTintColor="#ecf0f1"
+              thumbTintColor="#3498db"
+              disabled={motorRunning}
+            />
+            <View style={styles.sliderLabels}>
+              <Text style={styles.sliderLabel}>10 RPM</Text>
+              <Text style={styles.sliderLabel}>1800 RPM</Text>
+            </View>
+          </View>
+</View>
+        
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[
+              styles.toggleButton,
+              motorRunning ? styles.toggleButtonOn : styles.toggleButtonOff,
+              motorRunning && { backgroundColor: '#2ecc71' }
+            ]}
+            onPress={toggleMotor}
+            disabled={showEmergencyModal}
+          >
+            <MaterialCommunityIcons 
+              name={motorRunning ? "motion-sensor" : "motion-off"} 
+              size={24} 
+              color="white" 
+            />
+            <Text style={styles.toggleButtonText}>
+              {motorRunning ? "RUNNING" : "START MOTOR"}
+            </Text>
+          </TouchableOpacity>
+          
+          <View style={styles.timerContainer}>
+            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
+            <Text style={styles.timerText}>{formatTime(motorTime)}</Text>
+          </View>
+        </View>
+      </View>
+
 
       {/* Emergency Stop Section */}
       <View style={styles.emergencySection}>
@@ -556,4 +663,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: 'white',
   },
+  sliderContainer: {
+  marginBottom: 16,
+},
+slider: {
+  width: '100%',
+  height: 40,
+},
+sliderLabels: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  marginTop: 8,
+},
+sliderLabel: {
+  fontSize: 12,
+  color: '#7f8c8d',
+},
 });

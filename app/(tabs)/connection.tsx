@@ -1,4 +1,5 @@
 import { Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import axios from 'axios';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useState } from 'react';
 import {
@@ -11,33 +12,86 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-
+import WifiManager from 'react-native-wifi-reborn';
 
 export default function ConnectionScreen() {
   const [isConnected, setIsConnected] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scannedData, setScannedData] = useState<string | null>(null);
   const [permission, requestPermission] = useCameraPermissions();
+  const [piIp, setPiIp] = useState<string>('10.42.0.1'); // Default Pi IP in hotspot mode
+  const [connectionStatus, setConnectionStatus] = useState<string>('Disconnected');
+  const [isCheckingConnection, setIsCheckingConnection] = useState(false);
 
   const [manualSsid, setManualSsid] = useState('');
   const [manualPassword, setManualPassword] = useState('');
   const [isManualConnecting, setIsManualConnecting] = useState(false);
 
-  const handleManualConnect = () => {
-    if (!manualSsid.trim()) {
-      Alert.alert("Error", "Please enter a valid SSID");
-      return;
+  // Parse WiFi credentials from QR code
+  const parseWifiCredentials = (data: string) => {
+    try {
+      // Expected format: WIFI:S:SSID;T:WPA;P:password;;
+      const ssidMatch = data.match(/S:([^;]+)/);
+      const passwordMatch = data.match(/P:([^;]+)/);
+      
+      if (ssidMatch && passwordMatch) {
+        return {
+          ssid: ssidMatch[1],
+          password: passwordMatch[1]
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Error parsing WiFi credentials:', error);
+      return null;
     }
-    setIsManualConnecting(true);
-    // Simulate connection process
-    setTimeout(() => {
-      setIsConnected(true);
-      setScannedData(manualSsid);
-      setIsManualConnecting(false);
-      Alert.alert("Success", `Connected to ${manualSsid} successfully!`);
-    }, 2000);
   };
 
+  // Check connection status with Raspberry Pi
+  const checkPiConnection = async () => {
+    if (!piIp) return false;
+    
+    try {
+      const response = await axios.get(`http://${piIp}:5000/status`, { timeout: 5000 });
+      return response.status === 200;
+    } catch (error) {
+      console.error('Connection check failed:', error);
+      return false;
+    }
+  };
+
+  // Connect to WiFi network
+  const connectToWifi = async (ssid: string, password: string) => {
+    try {
+      // For Android - connect to WiFi
+      await WifiManager.connectToProtectedSSID(ssid, password, false, false);
+      return true;
+    } catch (error) {
+      console.error('WiFi connection failed:', error);
+      Alert.alert("Connection Error", "Failed to connect to WiFi network");
+      return false;
+    }
+  };
+
+  // Start connection status monitoring
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (isConnected) {
+      intervalId = setInterval(async () => {
+        const isPiConnected = await checkPiConnection();
+        if (!isPiConnected) {
+          setIsConnected(false);
+          setConnectionStatus('Disconnected');
+          Alert.alert("Connection Lost", "Lost connection to Raspberry Pi");
+        }
+      }, 5000); // Check every 5 seconds
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [isConnected, piIp]);
 
   // Request camera permission when component mounts
   useEffect(() => {
@@ -48,15 +102,55 @@ export default function ConnectionScreen() {
     })();
   }, []);
 
+  // Handle manual connection
+  const handleManualConnect = async () => {
+    if (!manualSsid.trim()) {
+      Alert.alert("Error", "Please enter a valid SSID");
+      return;
+    }
+
+    setIsManualConnecting(true);
+    
+    try {
+      const success = await connectToWifi(manualSsid, manualPassword);
+      
+      if (success) {
+        // Check if we can reach the Pi
+        const isPiConnected = await checkPiConnection();
+        
+        if (isPiConnected) {
+          setIsConnected(true);
+          setConnectionStatus('Connected');
+          setScannedData(manualSsid);
+          Alert.alert("Success", `Connected to ${manualSsid} successfully!`);
+        } else {
+          Alert.alert("Warning", "Connected to WiFi but couldn't reach Raspberry Pi");
+        }
+      }
+    } catch (error) {
+      console.error('Manual connection failed:', error);
+      Alert.alert("Error", "Failed to establish connection");
+    } finally {
+      setIsManualConnecting(false);
+    }
+  };
+
   // Handle QR code scanning
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
+  const handleBarCodeScanned = async ({ data }: { data: string }) => {
     setIsScanning(false);
     setScannedData(data);
     
-    // Simulate connection process
+    // Parse WiFi credentials from QR code
+    const credentials = parseWifiCredentials(data);
+    
+    if (!credentials) {
+      Alert.alert("Error", "Invalid QR code format");
+      return;
+    }
+
     Alert.alert(
       "QR Code Scanned", 
-      `Device ID: ${data}\n\nConnecting to device...`,
+      `SSID: ${credentials.ssid}\n\nConnecting to device...`,
       [
         {
           text: "Cancel",
@@ -64,12 +158,26 @@ export default function ConnectionScreen() {
         },
         { 
           text: "Connect", 
-          onPress: () => {
-            // Simulate connection success after 2 seconds
-            setTimeout(() => {
-              setIsConnected(true);
-              Alert.alert("Success", "Device connected successfully!");
-            }, 2000);
+          onPress: async () => {
+            try {
+              const success = await connectToWifi(credentials.ssid, credentials.password);
+              
+              if (success) {
+                // Verify Pi connection
+                const isPiConnected = await checkPiConnection();
+                
+                if (isPiConnected) {
+                  setIsConnected(true);
+                  setConnectionStatus('Connected');
+                  Alert.alert("Success", "Device connected successfully!");
+                } else {
+                  Alert.alert("Warning", "Connected to WiFi but couldn't reach Raspberry Pi");
+                }
+              }
+            } catch (error) {
+              console.error('QR connection failed:', error);
+              Alert.alert("Error", "Failed to establish connection");
+            }
           }
         }
       ]
@@ -105,12 +213,20 @@ export default function ConnectionScreen() {
   };
 
   // Disconnect from device
-  const disconnectDevice = () => {
-    setIsConnected(false);
-    setScannedData(null);
-    setManualSsid('');
-    setManualPassword('');
-    Alert.alert("Disconnected", "Device disconnected successfully");
+  const disconnectDevice = async () => {
+    try {
+      // Disconnect from WiFi
+      await WifiManager.disconnect();
+      setIsConnected(false);
+      setConnectionStatus('Disconnected');
+      setScannedData(null);
+      setManualSsid('');
+      setManualPassword('');
+      Alert.alert("Disconnected", "Device disconnected successfully");
+    } catch (error) {
+      console.error('Disconnection error:', error);
+      Alert.alert("Error", "Failed to disconnect from device");
+    }
   };
 
   return (
