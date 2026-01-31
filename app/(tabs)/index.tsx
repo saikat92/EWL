@@ -1,6 +1,8 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Dimensions, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
+import { sendCommand } from "../mqttService";
+
 
 // Mock data for the dashboard
 const user = { email: 'say.picklu@gmail.com' };
@@ -41,14 +43,15 @@ export default function DashboardScreen() {
       {/* Quick Actions */}
       <View style={styles.section}>
         <View style={styles.actionsContainer}>
-          <TouchableOpacity style={styles.actionButton}>
+          
+          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("start")}>
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(46, 204, 113, 0.2)'}]}>
               <MaterialCommunityIcons name="power" size={28} color="#2ecc71" />
             </View>
             <Text style={styles.actionText}>Power On</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("stop")}>
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(231, 76, 60, 0.2)'}]}>
               <MaterialCommunityIcons name="power-off" size={28} color="#e74c3c" />
             </View>
