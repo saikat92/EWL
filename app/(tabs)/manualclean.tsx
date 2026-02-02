@@ -11,6 +11,7 @@ import {
   View
 } from 'react-native';
 import { API } from '../gpioService';
+import { sendCommand } from "../mqttService";
 
 
 // Helper function to format time
@@ -150,7 +151,7 @@ useEffect(() => {
               uvOn ? styles.toggleButtonOn : styles.toggleButtonOff,
               uvOn && { backgroundColor: '#f1c40f' }
             ]}
-            onPress={toggleUV}
+            onPress={() => sendCommand(uvOn ? "uv_off" : "uv_on")} // Replace with toggleUV when API is ready
             disabled={showEmergencyModal}
           >
             <MaterialCommunityIcons 
@@ -173,13 +174,13 @@ useEffect(() => {
       {/* Add Conveyor Control Card (after UV Lamp Control Card)*/}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="conveyor-belt" size={24} color="#3498db" />
+            <MaterialCommunityIcons name="blur-linear" size={24} color="#3498db" />
           <Text style={styles.cardTitle}>Conveyor Control</Text>
         </View>
         
         <View style={styles.uvStatus}>
           <MaterialCommunityIcons 
-            name={conveyorOn ? "conveyor-belt" : "conveyor-belt-off"} 
+            name={conveyorOn ? "blur-linear" : "blur-radial"} 
             size={40} 
             color={conveyorOn ? "#2ecc71" : "#bdc3c7"} 
           />
@@ -188,50 +189,11 @@ useEffect(() => {
           </Text>
         </View>
         
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={[
-              styles.toggleButton,
-              conveyorOn ? styles.toggleButtonOn : styles.toggleButtonOff,
-              conveyorOn && { backgroundColor: '#2ecc71' }
-            ]}
-            onPress={toggleConveyor}
-            disabled={showEmergencyModal}
-          >
-            <MaterialCommunityIcons 
-              name={conveyorOn ? "power-plug" : "power-plug-off"} 
-              size={24} 
-              color="white" 
-            />
-            <Text style={styles.toggleButtonText}>
-              {conveyorOn ? "TURN OFF" : "TURN ON"}
-            </Text>
-          </TouchableOpacity>
-          
-          <View style={styles.timerContainer}>
-            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
-            <Text style={styles.timerText}>{formatTime(conveyorTime)}</Text>
-          </View>
-        </View>
-      </View>
-
-       {/* Motor Control Card */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
-          <Text style={styles.cardTitle}>Motor Control</Text>
-        </View>
-        
-        <View style={styles.controlRow}>
-          <Text style={styles.controlLabel}>Motor Speed (RPM)</Text>
-          <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
-        </View>
         
         {/* RPM Input Field */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
-            <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
-            <Text style={styles.cardTitle}>Motor Speed Control</Text>
+            <Text style={styles.cardTitle}>Speed Control</Text>
           </View>
           
           <View style={styles.controlRow}>
@@ -258,7 +220,49 @@ useEffect(() => {
               <Text style={styles.sliderLabel}>1800 RPM</Text>
             </View>
           </View>
-</View>
+        </View>
+        
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[
+              styles.toggleButton,
+              conveyorOn ? styles.toggleButtonOn : styles.toggleButtonOff,
+              conveyorOn && { backgroundColor: '#2ecc71' }
+            ]}
+            onPress={() => sendCommand(conveyorOn ? "conv_off" : "conv_on")} // Replace with toggleConveyor when API is ready
+            disabled={showEmergencyModal}
+          >
+            <MaterialCommunityIcons 
+              name={conveyorOn ? "power-plug" : "power-plug-off"} 
+              size={24} 
+              color="white" 
+            />
+            <Text style={styles.toggleButtonText}>
+              {conveyorOn ? "TURN OFF" : "TURN ON"}
+            </Text>
+          </TouchableOpacity>
+          
+          <View style={styles.timerContainer}>
+            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
+            <Text style={styles.timerText}>{formatTime(conveyorTime)}</Text>
+          </View>
+        </View>
+
+      </View>
+
+       {/* Motor Control Card */}
+      {/* <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
+          <Text style={styles.cardTitle}>Motor Control</Text>
+        </View>
+        
+        <View style={styles.controlRow}>
+          <Text style={styles.controlLabel}>Motor Speed (RPM)</Text>
+          <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
+        </View>
+        
+        
         
         <View style={styles.buttonRow}>
           <TouchableOpacity
@@ -285,7 +289,7 @@ useEffect(() => {
             <Text style={styles.timerText}>{formatTime(motorTime)}</Text>
           </View>
         </View>
-      </View>
+      </View> */}
 
 
       {/* Emergency Stop Section */}
@@ -366,7 +370,11 @@ useEffect(() => {
               
               <TouchableOpacity 
                 style={[styles.modalButton, styles.emergencyModalButton]}
-                onPress={handleEmergencyStop}
+                onPress={() => {
+                  handleEmergencyStop();
+                  setShowEmergencyModal(false);
+                  sendCommand("stop");
+                }}
               >
                 <Text style={styles.modalButtonText}>Confirm Stop</Text>
               </TouchableOpacity>
@@ -403,6 +411,7 @@ useEffect(() => {
                 onPress={() => {
                   setMotorRunning(false);
                   setShowConfirmStop(false);
+                  sendCommand("conv_off");  
                 }}
               >
                 <Text style={styles.modalButtonText}>Stop Motor</Text>

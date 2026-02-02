@@ -58,14 +58,14 @@ export default function DashboardScreen() {
             <Text style={styles.actionText}>Power Off</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("restart")}>
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(52, 152, 219, 0.2)'}]}>
               <MaterialCommunityIcons name="restart" size={28} color="#3498db" />
             </View>
             <Text style={styles.actionText}>Restart</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("auto_clean")}>
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(52, 152, 219, 0.2)'}]}>
               <MaterialCommunityIcons name="play" size={28} color="#3498db" />
             </View>
