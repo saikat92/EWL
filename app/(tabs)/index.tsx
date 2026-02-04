@@ -1,71 +1,197 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useEffect, useRef, useState } from "react";
 import { Dimensions, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
-import { sendCommand } from "../mqttService";
+import { connectMQTT, sendCommand } from "../mqttService";
+import { systemLog } from '../systemLogService';
 
-
-// Mock data for the dashboard
-const user = { email: 'say.picklu@gmail.com' };
-const motor = { status: 'good', rpm: 50, distance: '120 cm' };
-const uvLamp = { status: 'good' };
-const waterSystem = { status: 'bad', level: 85 };
-
-const mockOperations = [
-  { id: '1', title: 'Auto Cleaning', time: '2 hours ago' },
-  { id: '2', title: 'Manual Cleaning', time: '5 hours ago' },
-  { id: '3', title: 'System Update', time: '1 day ago' },
-  { id: '4', title: 'UV Lamp Maintenance', time: '2 days ago' },
-];
-
-const chartData = {
-  labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-  datasets: [
-    {
-      data: [45, 52, 48, 60, 55, 65, 70],
-      color: (opacity = 1) => `rgba(52, 152, 219, ${opacity})`,
-      strokeWidth: 2,
-    },
-  ],
-};
+interface StatusData {
+  state?: string;
+  motorRPM?: number;
+  uvStatus?: boolean;
+  waterLevel?: number;
+  conveyorStatus?: boolean;
+  temperature?: number;
+  lastUpdate?: number;
+}
 
 const screenWidth = Dimensions.get('window').width;
 
 // Helper function for status indicator
 const getStatusIndicator = (status: string) => {
-  const color = status === 'good' ? '#2ecc71' : '#e74c3c';
+  const color = status === 'good' ? '#2ecc71' : 
+                status === 'warning' ? '#f39c12' : '#e74c3c';
   return <View style={[styles.statusIndicator, { backgroundColor: color }]} />;
 };
 
+// Format time for display
+const formatTimeAgo = (timestamp?: number) => {
+  if (!timestamp) return '--';
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes} minutes ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} hours ago`;
+  return `${Math.floor(minutes / 1440)} days ago`;
+};
+
 export default function DashboardScreen() {
+  const [status, setStatus] = useState<StatusData | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [recentOperations, setRecentOperations] = useState<any[]>([]);
+  const [rpmHistory, setRpmHistory] = useState<number[]>([]);
+  const [motorStatus, setMotorStatus] = useState<'good' | 'warning' | 'bad'>('good');
+  const [uvStatus, setUvStatus] = useState<'good' | 'warning' | 'bad'>('good');
+  const [waterSystemStatus, setWaterSystemStatus] = useState<'good' | 'warning' | 'bad'>('good');
+  
+  // Refs for history tracking
+  const rpmHistoryRef = useRef<number[]>([]);
+  const maxHistoryLength = 20;
+
+  // Initialize MQTT connection
+  useEffect(() => {
+    const unsubscribe = connectMQTT(
+      (data) => {
+        console.log("STATUS:", data);
+        setStatus(data);
+        
+        // Log status update
+        systemLog.logStatus(data);
+        
+        // Update RPM history for chart
+        if (data.motorRPM !== undefined) {
+          const newRpm = data.motorRPM;
+          rpmHistoryRef.current = [...rpmHistoryRef.current, newRpm].slice(-maxHistoryLength);
+          setRpmHistory(rpmHistoryRef.current);
+        }
+        
+        // Update component statuses based on data
+        updateComponentStatuses(data);
+      },
+      () => {
+        setConnected(true);
+        systemLog.logConnection('MQTT Connected');
+      }
+    );
+
+    // Subscribe to log updates for recent operations
+    const logUnsubscribe = systemLog.subscribe((logs) => {
+      // Filter for operations and commands, limit to 4 most recent
+      const operations = logs
+        .filter(log => log.type === 'operation' || log.type === 'command')
+        .slice(0, 4)
+        .map(log => ({
+          id: log.id,
+          title: log.title,
+          time: formatTimeAgo(log.timestamp),
+          details: log.message,
+          type: log.type
+        }));
+      setRecentOperations(operations);
+    });
+
+    // Load initial recent operations
+    const initialLogs = systemLog.getLogs(4);
+    const initialOps = initialLogs
+      .filter(log => log.type === 'operation' || log.type === 'command')
+      .map(log => ({
+        id: log.id,
+        title: log.title,
+        time: formatTimeAgo(log.timestamp),
+        details: log.message,
+        type: log.type
+      }));
+    setRecentOperations(initialOps);
+
+    return () => {
+      unsubscribe?.();
+      logUnsubscribe();
+    };
+  }, []);
+
+  const updateComponentStatuses = (data: StatusData) => {
+    // Update motor status based on RPM
+    if (data.motorRPM !== undefined) {
+      if (data.motorRPM > 0 && data.motorRPM < 1000) setMotorStatus('good');
+      else if (data.motorRPM >= 1000 && data.motorRPM < 1500) setMotorStatus('warning');
+      else setMotorStatus('bad');
+    }
+
+    // Update UV status (assuming boolean from data)
+    setUvStatus(data.uvStatus ? 'good' : 'bad');
+
+    // Update water system status
+    if (data.waterLevel !== undefined) {
+      if (data.waterLevel > 50) setWaterSystemStatus('good');
+      else if (data.waterLevel > 20) setWaterSystemStatus('warning');
+      else setWaterSystemStatus('bad');
+    }
+  };
+
+  const handleCommand = (command: string) => {
+    sendCommand(command);
+    systemLog.logCommand(command, { timestamp: Date.now() });
+  };
+
+  // Prepare chart data
+  const chartData = {
+    labels: rpmHistory.map((_, index) => {
+      // Show labels for some points to avoid clutter
+      if (rpmHistory.length <= 7) return `${index + 1}`;
+      if (index % 3 === 0 || index === rpmHistory.length - 1) return `${index + 1}`;
+      return '';
+    }),
+    datasets: [{
+      data: rpmHistory.length > 0 ? rpmHistory : [0, 10, 20, 30, 40, 50, 60],
+      color: (opacity = 1) => `rgba(52, 152, 219, ${opacity})`,
+      strokeWidth: 2,
+    }],
+  };
+
   return (
     <ScrollView style={styles.container}>
-     
       {/* Quick Actions */}
       <View style={styles.section}>
         <View style={styles.actionsContainer}>
-          
-          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("start")}>
+          <TouchableOpacity 
+            style={styles.actionButton} 
+            onPress={() => handleCommand("start")}
+          >
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(46, 204, 113, 0.2)'}]}>
               <MaterialCommunityIcons name="power" size={28} color="#2ecc71" />
             </View>
             <Text style={styles.actionText}>Power On</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("stop")}>
+          <TouchableOpacity 
+            style={styles.actionButton} 
+            onPress={() => handleCommand("stop")}
+          >
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(231, 76, 60, 0.2)'}]}>
               <MaterialCommunityIcons name="power-off" size={28} color="#e74c3c" />
             </View>
             <Text style={styles.actionText}>Power Off</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("restart")}>
+          <TouchableOpacity 
+            style={styles.actionButton} 
+            onPress={() => handleCommand("restart")}
+          >
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(52, 152, 219, 0.2)'}]}>
               <MaterialCommunityIcons name="restart" size={28} color="#3498db" />
             </View>
             <Text style={styles.actionText}>Restart</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton} onPress={() => sendCommand("auto_clean")}>
+          <TouchableOpacity 
+            style={styles.actionButton} 
+            onPress={() => {
+              handleCommand("auto_clean");
+              // Navigate to auto-clean screen would be handled by navigation
+            }}
+          >
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(52, 152, 219, 0.2)'}]}>
               <MaterialCommunityIcons name="play" size={28} color="#3498db" />
             </View>
@@ -88,9 +214,14 @@ export default function DashboardScreen() {
             <View style={styles.statusIcon}>
               <MaterialCommunityIcons name="wifi" size={28} color="#3498db" />
             </View>
-            <Text style={styles.statusTitle}>WiFi</Text>
-            <Text style={[styles.statusValue, styles.connected]}>Connected</Text>
-            <Text style={styles.statusSubtext}>v1.0.2</Text>
+            <Text style={styles.statusTitle}>Network</Text>
+            <Text style={[styles.statusValue, connected ? styles.connected : styles.disconnected]}>
+              {connected ? "Connected" : "Connecting..."}
+            </Text>
+            <Text style={styles.statusSubtext}>State: {status?.state ?? "--"}</Text>
+            <Text style={styles.statusSubtext}>
+              Last update: {status?.lastUpdate ? formatTimeAgo(status.lastUpdate) : '--'}
+            </Text>
           </View>
 
           <View style={styles.statusCard}>
@@ -99,10 +230,10 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.statusTitle}>Motor</Text>
             <View style={styles.statusRow}>
-              <Text style={styles.statusValue}>{motor.rpm} RPM</Text>
-              {getStatusIndicator(motor.status)}
+              <Text style={styles.statusValue}>{status?.motorRPM ?? 0} RPM</Text>
+              {getStatusIndicator(motorStatus)}
             </View>
-            <Text style={styles.statusSubtext}>{motor.distance}</Text>
+            <Text style={styles.statusSubtext}>{motorStatus === 'good' ? 'Normal' : motorStatus === 'warning' ? 'High RPM' : 'Critical'}</Text>
           </View>
 
           <View style={styles.statusCard}>
@@ -111,8 +242,8 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.statusTitle}>UV Lamp</Text>
             <View style={styles.statusRow}>
-              <Text style={styles.statusValue}>Ready</Text>
-              {getStatusIndicator(uvLamp.status)}
+              <Text style={styles.statusValue}>{status?.uvStatus ? 'On' : 'Off'}</Text>
+              {getStatusIndicator(uvStatus)}
             </View>
             <Text style={styles.statusSubtext}>Sterilization</Text>
           </View>
@@ -123,20 +254,20 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.statusTitle}>Water System</Text>
             <View style={styles.statusRow}>
-              <Text style={styles.statusValue}>{waterSystem.level}%</Text>
-              {getStatusIndicator(waterSystem.status)}
+              <Text style={styles.statusValue}>{status?.waterLevel ?? 0}%</Text>
+              {getStatusIndicator(waterSystemStatus)}
             </View>
             <Text style={styles.statusSubtext}>Level</Text>
           </View>
         </View>
       </View>
 
-      {/* Performance Chart */}
+      {/* Performance Chart with Real Data */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Performance Metrics</Text>
-          <TouchableOpacity>
-            <Text style={styles.viewAll}>Full Report</Text>
+          <Text style={styles.sectionTitle}>Motor RPM History</Text>
+          <TouchableOpacity onPress={() => setRpmHistory([])}>
+            <Text style={styles.viewAll}>Clear</Text>
           </TouchableOpacity>
         </View>
         
@@ -146,6 +277,7 @@ export default function DashboardScreen() {
             width={screenWidth - 40}
             height={220}
             yAxisSuffix=" RPM"
+            fromZero={true}
             chartConfig={{
               backgroundColor: '#fff',
               backgroundGradientFrom: '#f8f9fa',
@@ -154,7 +286,7 @@ export default function DashboardScreen() {
               color: (opacity = 1) => `rgba(52, 152, 219, ${opacity})`,
               labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
               style: { borderRadius: 8 },
-              propsForDots: { r: '5', strokeWidth: '2', stroke: '#2E86DE' },
+              propsForDots: { r: '4', strokeWidth: '2', stroke: '#2E86DE' },
               propsForBackgroundLines: {
                 strokeDasharray: ""
               }
@@ -165,13 +297,15 @@ export default function DashboardScreen() {
           <View style={styles.chartLegend}>
             <View style={styles.legendItem}>
               <View style={[styles.legendColor, {backgroundColor: '#3498db'}]} />
-              <Text style={styles.legendText}>Motor RPM</Text>
+              <Text style={styles.legendText}>
+                Motor RPM ({rpmHistory.length > 0 ? rpmHistory[rpmHistory.length - 1] : 0} RPM)
+              </Text>
             </View>
           </View>
         </View>
       </View>
 
-      {/* Recent Operations */}
+      {/* Recent Operations with Real Data */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Operations</Text>
@@ -180,31 +314,45 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         </View>
         
-        <FlatList
-          data={mockOperations}
-          scrollEnabled={false}
-          keyExtractor={item => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.operationItem}>
-              <View style={styles.operationIcon}>
-                <MaterialCommunityIcons 
-                  name={item.title.includes('Auto') ? 'robot' : 
-                        item.title.includes('Manual') ? 'hand-back-right' :
-                        item.title.includes('System') ? 'restart' : 'lightbulb-on'} 
-                  size={24} 
-                  color="#3498db" 
-                />
+        {recentOperations.length > 0 ? (
+          <FlatList
+            data={recentOperations}
+            scrollEnabled={false}
+            keyExtractor={item => item.id}
+            renderItem={({ item }) => (
+              <View style={styles.operationItem}>
+                <View style={[
+                  styles.operationIcon,
+                  { backgroundColor: item.type === 'command' ? '#e8f4fd' : '#f0f7ff' }
+                ]}>
+                  <MaterialCommunityIcons 
+                    name={item.title.includes('Command') ? 'console' : 
+                          item.title.includes('Status') ? 'chart-line' :
+                          item.title.includes('Error') ? 'alert-circle' : 'cog'} 
+                    size={24} 
+                    color={item.type === 'command' ? '#3498db' : '#2ecc71'} 
+                  />
+                </View>
+                <View style={styles.operationDetails}>
+                  <Text style={styles.opTitle}>{item.title}</Text>
+                  <Text style={styles.opTime}>{item.time}</Text>
+                  <Text style={styles.opDetails} numberOfLines={1}>
+                    {item.details}
+                  </Text>
+                </View>
+                <TouchableOpacity style={styles.operationAction}>
+                  <MaterialCommunityIcons name="chevron-right" size={24} color="#7f8c8d" />
+                </TouchableOpacity>
               </View>
-              <View style={styles.operationDetails}>
-                <Text style={styles.opTitle}>{item.title}</Text>
-                <Text style={styles.opTime}>{item.time}</Text>
-              </View>
-              <TouchableOpacity style={styles.operationAction}>
-                <MaterialCommunityIcons name="chevron-right" size={24} color="#7f8c8d" />
-              </TouchableOpacity>
-            </View>
-          )}
-        />
+            )}
+          />
+        ) : (
+          <View style={styles.emptyState}>
+            <MaterialCommunityIcons name="history" size={48} color="#bdc3c7" />
+            <Text style={styles.emptyStateText}>No operations yet</Text>
+            <Text style={styles.emptyStateSubtext}>Operations will appear here</Text>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -213,7 +361,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#006435ff',
+    backgroundColor: '#BAB86C',
     padding: 16,
   },
   header: {
@@ -407,4 +555,30 @@ const styles = StyleSheet.create({
   operationAction: {
     padding: 4,
   },
+  disconnected: {
+    color: '#e74c3c',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+    backgroundColor: 'white',
+    borderRadius: 12,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#7f8c8d',
+    marginTop: 12,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: '#bdc3c7',
+    marginTop: 4,
+  },
+  opDetails: {
+    fontSize: 12,
+    color: '#95a5a6',
+    marginTop: 2,
+  }
 });

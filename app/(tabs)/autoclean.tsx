@@ -243,7 +243,7 @@ export default function AutoCleanScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#BAB86C',
   },
   contentContainer: {
     padding: 16,

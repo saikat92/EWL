@@ -6,6 +6,7 @@ export default function RootLayout() {
     <SafeAreaView style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
+        {/* <Stack.Screen name="SystemLogScreen" component={SystemLogScreen} /> */}
       </Stack>
     </SafeAreaView>
   );

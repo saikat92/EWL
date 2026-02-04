@@ -37,7 +37,7 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
   }, [isVisible]);
 
   const handlePrivacyPolicy = () => {
-    Linking.openURL('https://www.usa.canon.com/internet/portal/us/home/terms-of-use/privacy-policy');
+    Linking.openURL('#');
   };
 
   if (!isVisible) return null;
@@ -68,7 +68,7 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
           {/* Account Section */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>User ID</Text>
-            <Text style={styles.emailText}>say.picklu@gmail.com</Text>
+            <Text style={styles.emailText}>araneusedutech@gmail.com</Text>
             <TouchableOpacity style={styles.menuItem}>
               <Text>Confirming and deleting your account</Text>
             </TouchableOpacity>
@@ -88,7 +88,6 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
               <Text>Appearance mode</Text>
               <Text style={styles.settingValue}>Light</Text>
             </View>
-            
           </View>
 
           {/* Reset Section */}
