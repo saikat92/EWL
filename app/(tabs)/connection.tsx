@@ -246,7 +246,7 @@ export default function ConnectionScreen() {
   };
 
   return (
-    <View style={styles.container}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       {/* Header Section */}
       <View style={styles.header}>
         <MaterialCommunityIcons name="wifi" size={32} color="#3498db" />
@@ -254,7 +254,6 @@ export default function ConnectionScreen() {
         <Text style={styles.subtitle}>Connect to your E-Cleaning device</Text>
       </View>
 
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {/* Connection Status Card */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
@@ -474,7 +473,6 @@ export default function ConnectionScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
-    </View>
   );
 }
 
@@ -492,10 +490,8 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    padding: 16,
-    backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e9ecef',
+    marginBottom: 24,
+    paddingTop: 16,
   },
   title: {
     fontSize: 28,
@@ -509,7 +505,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   card: {
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,

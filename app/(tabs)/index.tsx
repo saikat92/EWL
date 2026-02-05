@@ -1,4 +1,5 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from "react";
 import { Dimensions, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
@@ -16,6 +17,7 @@ interface StatusData {
 }
 
 const screenWidth = Dimensions.get('window').width;
+const router = useRouter();
 
 // Helper function for status indicator
 const getStatusIndicator = (status: string) => {
@@ -74,7 +76,7 @@ export default function DashboardScreen() {
         setConnected(true);
         systemLog.logConnection('MQTT Connected');
       }
-    );
+    ) as (() => void) | undefined;
 
     // Subscribe to log updates for recent operations
     const logUnsubscribe = systemLog.subscribe((logs) => {
@@ -106,7 +108,9 @@ export default function DashboardScreen() {
     setRecentOperations(initialOps);
 
     return () => {
-      unsubscribe?.();
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
       logUnsubscribe();
     };
   }, []);
@@ -189,13 +193,13 @@ export default function DashboardScreen() {
             style={styles.actionButton} 
             onPress={() => {
               handleCommand("auto_clean");
-              // Navigate to auto-clean screen would be handled by navigation
+              router.push('/autoclean');
             }}
           >
             <View style={[styles.actionIcon, {backgroundColor: 'rgba(52, 152, 219, 0.2)'}]}>
               <MaterialCommunityIcons name="play" size={28} color="#3498db" />
             </View>
-            <Text style={styles.actionText}>Start Clean</Text>
+            <Text style={styles.actionText} >Start Clean</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -274,14 +278,14 @@ export default function DashboardScreen() {
         <View style={styles.chartContainer}>
           <LineChart
             data={chartData}
-            width={screenWidth - 40}
+            width={screenWidth - 60}
             height={220}
             yAxisSuffix=" RPM"
             fromZero={true}
             chartConfig={{
-              backgroundColor: '#fff',
+              backgroundColor: '#ebebbb',
               backgroundGradientFrom: '#f8f9fa',
-              backgroundGradientTo: '#f8f9fa',
+              backgroundGradientTo: '#ebebbb',
               decimalPlaces: 0,
               color: (opacity = 1) => `rgba(52, 152, 219, ${opacity})`,
               labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
@@ -309,9 +313,11 @@ export default function DashboardScreen() {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Operations</Text>
-          <TouchableOpacity>
-            <Text style={styles.viewAll}>See All</Text>
-          </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/SystemLogScreen')}>
+              <Text style={styles.viewAll}>
+                See All
+              </Text>
+            </TouchableOpacity>
         </View>
         
         {recentOperations.length > 0 ? (
@@ -323,7 +329,7 @@ export default function DashboardScreen() {
               <View style={styles.operationItem}>
                 <View style={[
                   styles.operationIcon,
-                  { backgroundColor: item.type === 'command' ? '#e8f4fd' : '#f0f7ff' }
+                  { backgroundColor: item.type === 'command' ? '#ebebbb' : '#f0f7ff' }
                 ]}>
                   <MaterialCommunityIcons 
                     name={item.title.includes('Command') ? 'console' : 
@@ -397,7 +403,7 @@ const styles = StyleSheet.create({
     color: '#2c3e50',
   },
   viewAll: {
-    color: '#3498db',
+    color: '#663535',
     fontSize: 14,
     fontWeight: '500',
   },
@@ -408,7 +414,7 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     width: '48%',
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     padding: 16,
     borderRadius: 12,
     marginBottom: 12,
@@ -439,7 +445,7 @@ const styles = StyleSheet.create({
   },
   statusCard: {
     width: '48%',
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     padding: 16,
     borderRadius: 12,
     marginBottom: 16,
@@ -488,7 +494,7 @@ const styles = StyleSheet.create({
     color: '#7f8c8d',
   },
   chartContainer: {
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     padding: 16,
     borderRadius: 12,
     shadowColor: '#000',

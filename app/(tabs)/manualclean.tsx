@@ -450,7 +450,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   card: {
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,
@@ -587,7 +587,7 @@ const styles = StyleSheet.create({
     color: '#7f8c8d',
   },
   statusCard: {
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,

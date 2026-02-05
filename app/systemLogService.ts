@@ -1,4 +1,3 @@
-// systemLogService.ts
 type LogType = 'command' | 'status' | 'error' | 'operation' | 'connection';
 
 interface LogEntry {

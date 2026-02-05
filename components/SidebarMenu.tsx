@@ -1,5 +1,5 @@
-// components/SidebarMenu.tsx
 import { Ionicons } from '@expo/vector-icons';
+import { Link } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 import {
   Animated,
@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+
 
 interface SidebarMenuProps {
   isVisible: boolean;
@@ -104,9 +105,13 @@ const SidebarMenu: React.FC<SidebarMenuProps> = ({ isVisible, onClose }) => {
             <TouchableOpacity style={styles.menuItem}>
               <Text>About this app</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem}>
-              <Text>System Log</Text>
-            </TouchableOpacity>
+            <Link href="/SystemLogScreen" asChild>
+              <TouchableOpacity>
+                <Text style={{ color: '#007AFF', fontWeight: '600' }}>
+                  See All
+                </Text>
+              </TouchableOpacity>
+            </Link>
             <TouchableOpacity style={styles.menuItem}>
               <Text>License</Text>
             </TouchableOpacity>

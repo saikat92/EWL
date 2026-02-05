@@ -10,6 +10,8 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+import { sendCommand } from "../mqttService";
+
 
 // Vegetable data with cleaning times
 const veggieData = {
@@ -60,6 +62,7 @@ export default function AutoCleanScreen() {
     setCountdown(timeRequired);
     setRunning(true);
     setShowConfirmation(false);
+    sendCommand('clean_start', { vegetable: selectedVeggie, duration: countdown, motorRPM });
   };
 
   const stopCleaning = () => {
@@ -69,6 +72,15 @@ export default function AutoCleanScreen() {
       "The cleaning process has been stopped.",
       [{ text: "OK" }]
     );
+    sendCommand('clean_stop');
+  };
+
+  const resetProcess = () => {
+    setRunning(false);
+    setCountdown(0);
+    setShowSuccess(false);
+    setShowConfirmation(false);
+    sendCommand('stop');
   };
 
   return (
@@ -101,22 +113,28 @@ export default function AutoCleanScreen() {
           </Picker>
         </View>
         
-        <View style={styles.veggieInfo}>
+        {/* <View style={styles.veggieInfo}>
           <MaterialCommunityIcons name="clock" size={20} color="#7f8c8d" />
           <Text style={styles.infoText}>Cleaning time: {formatTime(timeRequired)}</Text>
-        </View>
+        </View> */}
       </View>
 
       {/* Settings Card */}
       <View style={styles.card}>
+        
         <View style={styles.cardHeader}>
           <MaterialCommunityIcons name="tune" size={24} color="#3498db" />
           <Text style={styles.cardTitle}>Operation Settings</Text>
         </View>
         
         <View style={styles.settingRow}>
+          <Text style={styles.settingLabel}>Cleaning Time</Text>
+          <Text style={styles.settingValue}>{formatTime(timeRequired)}</Text>
+        </View>
+
+        <View style={styles.settingRow}>
           <Text style={styles.settingLabel}>Conveyor Belt Length</Text>
-          <Text style={styles.settingValue}>{conveyorLength} meters</Text>
+          <Text style={styles.settingValue}>{conveyorLength} ft</Text>
         </View>
         
         <View style={styles.settingRow}>
@@ -138,7 +156,7 @@ export default function AutoCleanScreen() {
         <View style={styles.statusRow}>
           <View style={styles.statusIndicator}>
             <MaterialCommunityIcons 
-              name={running ? "motion-sensor" : "motion-off"} 
+              name={running ? "motion-sensor" : "motion-sensor-off"} 
               size={20} 
               color={running ? "#2ecc71" : "#e74c3c"} 
             />
@@ -176,8 +194,15 @@ export default function AutoCleanScreen() {
             <Text style={styles.buttonText}>STOP PROCESS</Text>
           </TouchableOpacity>
         )}
-      </View>
 
+      </View>
+      <View style={styles.buttonContainer}>
+          <TouchableOpacity onPress={resetProcess}
+          style={[styles.button, styles.resetButton]}>
+            <MaterialCommunityIcons name="restart" size={24} color="white" />
+            <Text style={styles.buttonText}>RESET</Text>
+          </TouchableOpacity>
+      </View>
       {/* Confirmation Modal */}
       <Modal
         animationType="fade"
@@ -266,7 +291,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   card: {
-    backgroundColor: 'white',
+    backgroundColor: '#ebebbb',
     borderRadius: 16,
     padding: 20,
     marginBottom: 20,
@@ -376,10 +401,19 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   startButton: {
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#556B2F',
+    color: 'white',
+    fontSize: 24,
   },
   stopButton: {
     backgroundColor: '#e74c3c',
+    color: 'white',
+    fontSize: 24,
+  },
+  resetButton: {
+    backgroundColor: '#556B2F',
+    color: 'white',
+    fontSize: 24,
   },
   buttonText: {
     color: 'white',
