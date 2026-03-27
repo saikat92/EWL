@@ -15,14 +15,14 @@ import { sendCommand } from "../mqttService";
 
 // Vegetable data with cleaning times
 const veggieData = {
-  'Tomato': 180, // 3 minutes
-  'Cucumber': 120, // 2 minutes
-  'Carrot': 150, // 2.5 minutes
-  'Lettuce': 200, // 3.33 minutes
-  'Bell Pepper': 130, // 2.16 minutes
-  'Potato': 240, // 4 minutes
-  'Broccoli': 170, // 2.83 minutes
-  'Cauliflower': 190, // 3.16 minutes
+  'Tomato': 3, // 3 minutes
+  'Cucumber': 2, // 2 minutes
+  'Carrot': 2.5, // 2.5 minutes
+  'Lettuce': 3.33, // 3.33 minutes
+  'Bell Pepper': 2.16, // 2.16 minutes
+  'Potato': 4, // 4 minutes
+  'Broccoli': 2.83, // 2.83 minutes
+  'Cauliflower': 3.16, // 3.16 minutes
 };
 
 // Helper function to format time
@@ -44,7 +44,30 @@ export default function AutoCleanScreen() {
   
   // Fixed settings
   const conveyorLength = 2.5;
-  const motorRPM = 75;
+  // const motorRPM = 75;
+  const BELT_LENGTH_INCH = 30;
+  const INCH_PER_RPM = 2;
+  const MIN_RPM = 10;
+  const MAX_RPM = 1000;
+
+  const motorRPM = (conveyorLength / timeRequired) * 30; // Convert minutes to seconds and calculate RPM
+
+    const calculateRPM = (timeMinutes: number): number => {
+    if (timeMinutes <= 0) return MIN_RPM;
+
+    const rpm = (BELT_LENGTH_INCH / timeMinutes) / INCH_PER_RPM;
+
+    return Math.min(Math.max(Math.round(rpm), MIN_RPM), MAX_RPM);
+  };
+
+  const onVegetableChange = (veg: string) => {
+    const time = veggieData[veg as keyof typeof veggieData]; // minutes
+    const rpm = calculateRPM(time);
+
+      // setSelectedVegetable(veg);
+      // setCleaningTime(time);
+      // setMotorRPM(rpm);
+  };
 
   // Countdown timer effect
   useEffect(() => {
