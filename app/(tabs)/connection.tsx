@@ -1,332 +1,305 @@
-import { Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   Linking,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import WifiManager from 'react-native-wifi-reborn';
-import { connectMQTT, disconnectMQTT, PiSnapshot } from "../mqttService";
+import { connectMQTT, disconnectMQTT, PiSnapshot } from '../mqttService';
 
+const BROKER_IP   = '192.168.4.1';
+const DEVICE_SSID = 'ECleaning-Device';
+const DEVICE_PASS = 'ecl3an2024';
+
+type ConnState = 'disconnected' | 'connecting' | 'connected';
 
 export default function ConnectionScreen() {
-  const [isScanning, setIsScanning]           = useState(false);
-  const [scannedData, setScannedData]         = useState<string | null>(null);
-  const [permission, requestPermission]       = useCameraPermissions();
-  const [piIp, setPiIp]                       = useState<string>('192.168.4.1');
-  const [connectionStatus, setConnectionStatus] = useState<string>('Disconnected');
+  const [connState,   setConnState]   = useState<ConnState>('disconnected');
+  const [snapshot,    setSnapshot]    = useState<PiSnapshot | null>(null);
+  const [isScanning,  setIsScanning]  = useState(false);
+  const [scannedSSID, setScannedSSID] = useState<string | null>(null);
+  const [manualSsid,  setManualSsid]  = useState('');
+  const [manualPass,  setManualPass]  = useState('');
+  const [permission,  requestPermission] = useCameraPermissions();
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [manualSsid, setManualSsid]           = useState('');
-  const [manualPassword, setManualPassword]   = useState('');
-  const [isManualConnecting, setIsManualConnecting] = useState(false);
+  const pulseAnim  = useRef(new Animated.Value(1)).current;
+  const mqttTried  = useRef(false);
 
-  const [status, setStatus]     = useState<PiSnapshot | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
-
-  // ── MQTT connection ────────────────────────────────────────────────────────
+  // ── Pulse animation for connecting state ────────────────────────────────
   useEffect(() => {
+    if (connState !== 'connecting') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1.0, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [connState]);
+
+  // ── Try MQTT connection ─────────────────────────────────────────────────
+
+  const tryMQTT = useCallback(() => {
+    setConnState('connecting');
+    setErrorMsg(null);
+
     connectMQTT(
       (data) => {
-        // Snapshot received from Pi — device is definitely reachable
-        setStatus(data);
-        if (!connected) {
-          setConnected(true);
-          setIsConnected(true);
-          setConnectionStatus('Connected');
-          setPiIp('192.168.4.1');
-        }
+        setSnapshot(data);
+        setConnState('connected');
       },
       () => {
-        // MQTT broker handshake complete
-        setConnected(true);
-        setIsConnected(true);
-        setConnectionStatus('Connected');
+        setConnState('connected');
+      },
+      (err) => {
+        setConnState('disconnected');
+        setErrorMsg(`Broker unreachable: ${err}`);
       }
     );
-  }, []);
 
-  // ── Camera permission on mount ────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      if (!permission?.granted) {
-        await requestPermission();
-      }
-    })();
-  }, []);
-
-  // ── WiFi connection ───────────────────────────────────────────────────────
-  const connectToWifi = async (ssid: string, password: string) => {
-    try {
-      await WifiManager.connectToProtectedSSID(ssid, password, false, false);
-      return true;
-    } catch (error) {
-      console.error('WiFi connection failed:', error);
-      Alert.alert("Connection Error", "Failed to connect to WiFi network");
-      return false;
-    }
-  };
-
-  // ── Parse QR WiFi credentials ─────────────────────────────────────────────
-  // Expected format: WIFI:T:WPA;S:SSID;P:password;;
-  const parseWifiCredentials = (data: string) => {
-    try {
-      const ssidMatch     = data.match(/S:([^;]+)/);
-      const passwordMatch = data.match(/P:([^;]+)/);
-      if (ssidMatch && passwordMatch) {
-        return { ssid: ssidMatch[1], password: passwordMatch[1] };
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  };
-
-  // ── Manual connect ────────────────────────────────────────────────────────
-  const handleManualConnect = async () => {
-    if (!manualSsid.trim()) {
-      Alert.alert("Error", "Please enter a valid SSID");
-      return;
-    }
-    setIsManualConnecting(true);
-    try {
-      const success = await connectToWifi(manualSsid, manualPassword);
-      if (success) {
-        // MQTT will auto-reconnect once on the Pi network
-        // Connection state is set by the MQTT onConnected callback above
-        Alert.alert(
-          "WiFi Joined",
-          `Joined ${manualSsid}. Waiting for device connection...`
-        );
-      }
-    } catch (error) {
-      Alert.alert("Error", "Failed to establish connection");
-    } finally {
-      setIsManualConnecting(false);
-    }
-  };
-
-  // ── QR scan handler ───────────────────────────────────────────────────────
-  const handleBarCodeScanned = async ({ data }: { data: string }) => {
-    setIsScanning(false);
-    setScannedData(data);
-
-    const credentials = parseWifiCredentials(data);
-    if (!credentials) {
-      Alert.alert("Error", "Invalid QR code format. Expected WiFi QR.");
-      return;
-    }
-
-    Alert.alert(
-      "QR Code Scanned",
-      `Network: ${credentials.ssid}\n\nConnect to this device?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Connect",
-          onPress: async () => {
-            try {
-              const success = await connectToWifi(
-                credentials.ssid,
-                credentials.password
-              );
-              if (success) {
-                Alert.alert(
-                  "WiFi Joined",
-                  "Joined device network. Connecting to MQTT broker..."
-                );
-                // MQTT will auto-reconnect — callback sets isConnected
-              }
-            } catch {
-              Alert.alert("Error", "Failed to connect to device network");
-            }
-          }
+    setTimeout(() => {
+      setConnState((prev) => {
+        if (prev === 'connecting') {
+          setErrorMsg('Connection timed out. Is the Pi hotspot active?');
+          return 'disconnected';
         }
+        return prev;
+      });
+    }, 8000);
+  }, []);
+
+  // ── Auto-try on mount (in case already on hotspot) ──────────────────────
+  useEffect(() => {
+    tryMQTT();
+  }, []);
+
+  // ── Camera permission ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!permission?.granted) requestPermission();
+  }, []);
+
+  // ── QR parser ───────────────────────────────────────────────────────────
+  const parseWifiQR = (data: string) => {
+    try {
+      console.log("[QR] Raw data:", data);
+      // Strip WIFI: prefix, split on semicolons
+      const clean  = data.replace(/^WIFI:/, '');
+      const parts  = clean.split(';');
+      const map: Record<string, string> = {};
+      parts.forEach((p) => {
+        const idx = p.indexOf(':');
+        if (idx > 0) {
+          map[p.slice(0, idx)] = p.slice(idx + 1);
+        }
+      });
+      console.log("[QR] Parsed map:", map);
+      if (map['S'] && map['P']) {
+        return { ssid: map['S'], password: map['P'] };
+      }
+      return null;
+    } catch (e) {
+      console.error("[QR] Parse error:", e);
+      return null;
+    }
+  };
+
+  // ── QR scan handler ─────────────────────────────────────────────────────
+  const handleQRScanned = async ({ data }: { data: string }) => {
+    setIsScanning(false);
+    const creds = parseWifiQR(data);
+    if (!creds) {
+      Alert.alert('Invalid QR', 'Could not read Wi-Fi credentials from this QR code.');
+      return;
+    }
+    setScannedSSID(creds.ssid);
+    Alert.alert(
+      'Network Found',
+      `Join "${creds.ssid}" and connect to device?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Connect', onPress: () => joinWifi(creds.ssid, creds.password) },
       ]
     );
   };
 
-  // ── Disconnect ────────────────────────────────────────────────────────────
-  const disconnectDevice = async () => {
+  // ── Join WiFi then MQTT ─────────────────────────────────────────────────
+  const joinWifi = async (ssid: string, password: string) => {
+    setConnState('connecting');
     try {
-      disconnectMQTT();
-      await WifiManager.disconnect();
-      setIsConnected(false);
-      setConnected(false);
-      setConnectionStatus('Disconnected');
-      setScannedData(null);
-      setManualSsid('');
-      setManualPassword('');
-      setStatus(null);
-      Alert.alert("Disconnected", "Device disconnected successfully");
-    } catch (error) {
-      Alert.alert("Error", "Failed to disconnect from device");
+      await WifiManager.connectToProtectedSSID(ssid, password, false, false);
+      // Wait for DHCP
+      setTimeout(() => tryMQTT(), 3000);
+    } catch {
+      setConnState('disconnected');
+      Alert.alert('WiFi Error', 'Could not join the network. Try manually in phone Settings.');
     }
   };
 
-  // ── Scan controls ─────────────────────────────────────────────────────────
-  const startScanning = () => {
-    if (!permission?.granted) {
-      Alert.alert(
-        "Camera Permission Required",
-        "Please allow camera access to scan QR codes",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Open Settings", onPress: () => Linking.openSettings() }
-        ]
-      );
+  // ── Manual connect ──────────────────────────────────────────────────────
+  const handleManualConnect = async () => {
+    if (!manualSsid.trim()) {
+      Alert.alert('Error', 'Please enter the network SSID');
       return;
     }
-    setIsScanning(true);
-    setScannedData(null);
+    await joinWifi(manualSsid.trim(), manualPass.trim());
   };
 
-  const stopScanning = () => setIsScanning(false);
+  // ── Quick connect (already on hotspot) ─────────────────────────────────
+  const handleQuickConnect = () => {
+    disconnectMQTT();
+    setTimeout(() => tryMQTT(), 300);
+  };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Disconnect ──────────────────────────────────────────────────────────
+  const handleDisconnect = async () => {
+    disconnectMQTT();
+    setConnState('disconnected');
+    setSnapshot(null);
+    try { await WifiManager.disconnect(); } catch {}
+  };
+
+  // ── Status colour ───────────────────────────────────────────────────────
+  const statusColor = connState === 'connected' ? '#00FF9C'
+    : connState === 'connecting' ? '#FFB800' : '#FF3D5A';
+  const statusLabel = connState === 'connected' ? 'CONNECTED'
+    : connState === 'connecting' ? 'CONNECTING...' : 'NOT CONNECTED';
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
-
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       {/* ── Header ── */}
       <View style={styles.header}>
-        <MaterialCommunityIcons name="wifi" size={32} color="#00D4FF" />
+        <MaterialCommunityIcons name="wifi-arrow-right" size={32} color="#00D4FF" />
         <Text style={styles.title}>Device Connection</Text>
-        <Text style={styles.subtitle}>Connect to your E-Cleaning device</Text>
+        <Text style={styles.subtitle}>E-Cleaning UV System  ·  {BROKER_IP}</Text>
       </View>
 
-      {/* ── Connection Status Card ── */}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Ionicons
-            name={connected ? "checkmark-circle" : "close-circle"}
-            size={24}
-            color={connected ? "#00FF9C" : "#FF3D5A"}
-          />
-          <Text style={styles.cardTitle}>
-            {connected ? "Connected" : "Not Connected"}
-          </Text>
-        </View>
-
-        <View style={styles.statusIndicator}>
-          <View style={[
-            styles.statusDot,
-            { backgroundColor: connected ? "#00FF9C" : "#FF3D5A" }
+      {/* ── Status Card ── */}
+      <View style={[styles.statusCard, { borderColor: statusColor }]}>
+        <View style={styles.statusTop}>
+          <Animated.View style={[
+            styles.statusDot, { backgroundColor: statusColor, opacity: connState === 'connecting' ? pulseAnim : 1 }
           ]} />
-          <Text style={styles.statusText}>
-            {connected
-              ? `Device reachable at ${piIp}`
-              : "No device connected"}
-          </Text>
+          <Text style={[styles.statusLabel, { color: statusColor }]}>{statusLabel}</Text>
+          {connState === 'connected' && (
+            <TouchableOpacity onPress={handleDisconnect} style={styles.disconnectPill}>
+              <Text style={styles.disconnectPillText}>Disconnect</Text>
+            </TouchableOpacity>
+          )}
         </View>
-
-        <View style={styles.statusIndicator}>
-          <View style={[
-            styles.statusDot,
-            { backgroundColor: connected ? "#00FF9C" : "#FF3D5A" }
-          ]} />
-          <Text style={styles.statusText}>
-            {connected
-              ? `MQTT Broker: ${piIp}:1883`
-              : "MQTT broker not reachable"}
-          </Text>
-        </View>
-
-        {/* Live snapshot preview when connected */}
-        {connected && status && (
-          <View style={styles.snapshotRow}>
-            <View style={styles.snapshotBadge}>
-              <Text style={styles.snapshotLabel}>STATE</Text>
-              <Text style={styles.snapshotValue}>{status.deviceState}</Text>
-            </View>
-            <View style={styles.snapshotBadge}>
-              <Text style={styles.snapshotLabel}>MOTOR</Text>
-              <Text style={styles.snapshotValue}>{status.motorRPM} RPM</Text>
-            </View>
-            <View style={styles.snapshotBadge}>
-              <Text style={styles.snapshotLabel}>UV</Text>
-              <Text style={styles.snapshotValue}>
-                {status.uvActive ? "ON" : "OFF"}
-              </Text>
-            </View>
+        {errorMsg && (
+          <View style={styles.errorBanner}>
+            <MaterialCommunityIcons name="alert-circle" size={16} color="#FF3D5A" />
+            <Text style={styles.errorText}>{errorMsg}</Text>
           </View>
         )}
 
-        {isConnected && (
-          <TouchableOpacity
-            style={styles.disconnectButton}
-            onPress={disconnectDevice}
-          >
-            <Ionicons name="power" size={18} color="white" />
-            <Text style={styles.disconnectButtonText}>Disconnect</Text>
-          </TouchableOpacity>
+        {connState === 'connected' && snapshot && (
+          <View style={styles.snapshotGrid}>
+            {[
+              { k: 'STATE',    v: snapshot.deviceState },
+              { k: 'MOTOR',    v: `${snapshot.motorRPM} RPM` },
+              { k: 'UV',       v: snapshot.uvActive ? 'ON' : 'OFF' },
+              { k: 'IP',       v: snapshot.deviceIp },
+            ].map((item) => (
+              <View key={item.k} style={styles.snapshotItem}>
+                <Text style={styles.snapshotKey}>{item.k}</Text>
+                <Text style={styles.snapshotVal}>{item.v}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {connState === 'connected' && !snapshot && (
+          <Text style={styles.waitingText}>Waiting for first snapshot from device…</Text>
+        )}
+
+        {connState === 'disconnected' && (
+          <View style={styles.quickConnectWrap}>
+            <Text style={styles.quickConnectHint}>
+              Already connected to "{DEVICE_SSID}" hotspot?
+            </Text>
+            <TouchableOpacity style={styles.quickConnectBtn} onPress={handleQuickConnect}>
+              <MaterialCommunityIcons name="lan-connect" size={18} color="#0A0E1A" />
+              <Text style={styles.quickConnectBtnText}>Connect to Device Now</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {connState === 'connecting' && (
+          <Text style={styles.waitingText}>
+            Reaching broker at {BROKER_IP}:1883…
+          </Text>
         )}
       </View>
 
       {/* ── QR Scanner Card ── */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="qrcode-scan" size={24} color="#00D4FF" />
-          <Text style={styles.cardTitle}>Scan Device QR Code</Text>
+          <MaterialCommunityIcons name="qrcode-scan" size={20} color="#00D4FF" />
+          <Text style={styles.cardTitle}>Scan Device QR</Text>
         </View>
-
-        <Text style={styles.cardDescription}>
-          Scan the QR code shown on the E-Cleaning device screen to
-          automatically join its Wi-Fi network.
+        <Text style={styles.cardDesc}>
+          Point camera at the QR code shown on the Pi screen to auto-join its Wi-Fi.
         </Text>
 
-        <View style={styles.qrContainer}>
+        <View style={styles.qrBox}>
           {isScanning ? (
-            <View style={styles.cameraContainer}>
-              <CameraView
-                style={styles.camera}
-                facing="back"
-                onBarcodeScanned={handleBarCodeScanned}
-                barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-              />
-              <View style={styles.scannerOverlay}>
-                <View style={styles.scannerFrame}>
-                  <View style={[styles.corner, styles.cornerTopLeft]} />
-                  <View style={[styles.corner, styles.cornerTopRight]} />
-                  <View style={[styles.corner, styles.cornerBottomLeft]} />
-                  <View style={[styles.corner, styles.cornerBottomRight]} />
+            <CameraView
+              style={StyleSheet.absoluteFillObject}
+              facing="back"
+              onBarcodeScanned={handleQRScanned}
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+            >
+              <View style={styles.qrOverlay}>
+                <View style={styles.qrFrame}>
+                  {['TL','TR','BL','BR'].map((c) => (
+                    <View key={c} style={[styles.qrCorner,
+                      c.includes('T') ? styles.qrTop : styles.qrBottom,
+                      c.includes('L') ? styles.qrLeft : styles.qrRight,
+                    ]} />
+                  ))}
                 </View>
-                <Text style={styles.scannerText}>
-                  Align QR code within the frame
-                </Text>
+                <Text style={styles.qrHint}>Align QR within frame</Text>
               </View>
-            </View>
+            </CameraView>
           ) : (
             <View style={styles.qrPlaceholder}>
-              <MaterialCommunityIcons name="qrcode" size={64} color="#4A6080" />
-              <Text style={styles.placeholderText}>
-                {scannedData ? "QR code scanned" : "Camera inactive"}
+              <MaterialCommunityIcons name="qrcode" size={56} color="#1E2D4A" />
+              <Text style={styles.qrPlaceholderText}>
+                {scannedSSID ? `Scanned: ${scannedSSID}` : 'Camera off'}
               </Text>
-              {scannedData && (
-                <Text style={styles.scannedDataText} numberOfLines={1}>
-                  {scannedData}
-                </Text>
-              )}
             </View>
           )}
         </View>
 
         <TouchableOpacity
-          style={[styles.scanButton, isScanning && styles.scanButtonActive]}
-          onPress={isScanning ? stopScanning : startScanning}
+          style={[styles.btn, isScanning && styles.btnRed]}
+          onPress={() => {
+            if (!permission?.granted) {
+              Alert.alert('Camera Permission', 'Allow camera access to scan QR codes.',
+                [{ text: 'Open Settings', onPress: () => Linking.openSettings() }, { text: 'Cancel' }]);
+              return;
+            }
+            setIsScanning((v) => !v);
+          }}
         >
-          <MaterialCommunityIcons
-            name={isScanning ? "camera-off" : "camera"}
-            size={20}
-            color="white"
-          />
-          <Text style={styles.scanButtonText}>
-            {isScanning ? "Stop Scanning" : "Scan QR Code"}
+          <MaterialCommunityIcons name={isScanning ? 'camera-off' : 'camera'} size={18} color={isScanning ? 'white' : '#0A0E1A'} />
+          <Text style={[styles.btnText, isScanning && { color: 'white' }]}>
+            {isScanning ? 'Stop Scanning' : 'Scan QR Code'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -334,18 +307,16 @@ export default function ConnectionScreen() {
       {/* ── Manual Connect Card ── */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="wifi-settings" size={24} color="#00D4FF" />
-          <Text style={styles.cardTitle}>Manual Connection</Text>
+          <MaterialCommunityIcons name="wifi-settings" size={20} color="#00D4FF" />
+          <Text style={styles.cardTitle}>Manual Wi-Fi</Text>
         </View>
-
-        <Text style={styles.cardDescription}>
-          Manually enter the device Wi-Fi credentials if QR scanning is
-          unavailable.
+        <Text style={styles.cardDesc}>
+          Enter credentials if QR scanning is unavailable.
         </Text>
 
         <TextInput
           style={styles.input}
-          placeholder="Network SSID (e.g. ECleaning-Device)"
+          placeholder={`SSID  (default: ${DEVICE_SSID})`}
           placeholderTextColor="#4A6080"
           value={manualSsid}
           onChangeText={setManualSsid}
@@ -353,301 +324,175 @@ export default function ConnectionScreen() {
         />
         <TextInput
           style={styles.input}
-          placeholder="Password"
+          placeholder={`Password  (default: ${DEVICE_PASS})`}
           placeholderTextColor="#4A6080"
-          value={manualPassword}
-          onChangeText={setManualPassword}
+          value={manualPass}
+          onChangeText={setManualPass}
           secureTextEntry
           autoCapitalize="none"
         />
-
         <TouchableOpacity
-          style={[
-            styles.scanButton,
-            isManualConnecting && styles.scanButtonDisabled
-          ]}
+          style={[styles.btn, connState === 'connecting' && styles.btnDisabled]}
           onPress={handleManualConnect}
-          disabled={isManualConnecting}
+          disabled={connState === 'connecting'}
         >
-          <MaterialCommunityIcons name="wifi-arrow-right" size={20} color="white" />
-          <Text style={styles.scanButtonText}>
-            {isManualConnecting ? "Connecting..." : "Connect Manually"}
-          </Text>
+          <MaterialCommunityIcons name="wifi-arrow-right" size={18} color="#0A0E1A" />
+          <Text style={styles.btnText}>Connect</Text>
         </TouchableOpacity>
       </View>
 
       {/* ── Help Card ── */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <Ionicons name="help-circle" size={24} color="#00D4FF" />
-          <Text style={styles.cardTitle}>Connection Help</Text>
+          <Ionicons name="help-circle-outline" size={20} color="#00D4FF" />
+          <Text style={styles.cardTitle}>Troubleshooting</Text>
         </View>
 
         {[
           {
-            icon: <MaterialIcons name="power" size={20} color="#00D4FF" />,
-            title: "Ensure Device is Powered On",
-            desc: "Make sure your E-Cleaning device is turned on. The screen should show the QR pairing page.",
+            icon: 'wifi',
+            title: 'Already on device hotspot?',
+            desc: `If your phone shows "${DEVICE_SSID}" in Wi-Fi settings, tap "Connect to Device Now" on the status card above — no need to scan QR.`,
           },
           {
-            icon: <Ionicons name="wifi" size={20} color="#00D4FF" />,
-            title: "Enable Wi-Fi on Your Phone",
-            desc: `Connect to "ECleaning-Device" network. Default password: ecl3an2024`,
+            icon: 'qrcode',
+            title: 'QR not scanning?',
+            desc: 'Ensure good screen brightness on the Pi display. Hold phone 15–30 cm away. If it still fails, use Manual Wi-Fi below.',
           },
           {
-            icon: <MaterialCommunityIcons name="qrcode" size={20} color="#00D4FF" />,
-            title: "Scan the QR Code",
-            desc: "Hold your phone steady 15–30 cm from the screen. Ensure good lighting.",
+            icon: 'server-network',
+            title: 'Connected to WiFi but still offline?',
+            desc: `Phone joined the hotspot but app can't reach the broker. Tap "Connect to Device Now". MQTT broker must be running on the Pi (port 1883).`,
           },
           {
-            icon: <MaterialCommunityIcons name="server-network" size={20} color="#00D4FF" />,
-            title: "MQTT Broker",
-            desc: "The app connects to 192.168.4.1:1883 automatically after joining the device network.",
+            icon: 'alert-circle-outline',
+            title: 'IP configuration failure?',
+            desc: 'Restart the Pi app to restart hostapd and dnsmasq. Then forget the network on your phone and reconnect.',
           },
         ].map((item, i) => (
           <View key={i} style={styles.helpItem}>
-            <View style={styles.helpIcon}>{item.icon}</View>
+            <View style={styles.helpIconWrap}>
+              <MaterialCommunityIcons name={item.icon as any} size={18} color="#00D4FF" />
+            </View>
             <View style={styles.helpContent}>
               <Text style={styles.helpTitle}>{item.title}</Text>
-              <Text style={styles.helpDescription}>{item.desc}</Text>
+              <Text style={styles.helpDesc}>{item.desc}</Text>
             </View>
           </View>
         ))}
       </View>
 
+      <View style={{ height: 20 }} />
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0E1A',
+  container: { flex: 1, backgroundColor: '#0A0E1A' },
+  content:   { padding: 16, paddingBottom: 32 },
+
+  header: { alignItems: 'center', paddingTop: 16, marginBottom: 20 },
+  title:   { fontSize: 24, fontWeight: '800', color: '#E8F4FD', marginTop: 10 },
+  subtitle:{ fontSize: 12, color: '#4A6080', marginTop: 4 },
+
+  // Status card
+  statusCard: {
+    borderRadius: 14, borderWidth: 1.5,
+    backgroundColor: '#0F1629',
+    padding: 18, marginBottom: 16,
   },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 40,
+  statusTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 10 },
+  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  statusLabel: { fontSize: 13, fontWeight: '800', letterSpacing: 1, flex: 1 },
+  disconnectPill: {
+    backgroundColor: '#FF3D5A', borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 5,
   },
-  header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 16,
+  disconnectPillText: { fontSize: 11, fontWeight: '700', color: 'white' },
+
+  snapshotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  snapshotItem: {
+    flex: 1, minWidth: '44%',
+    backgroundColor: '#141D35', borderRadius: 10,
+    padding: 10, borderWidth: 1, borderColor: '#1E2D4A',
   },
-  title: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#E8F4FD',
-    marginTop: 12,
+  snapshotKey: { fontSize: 9, fontWeight: '800', color: '#4A6080', letterSpacing: 1, marginBottom: 3 },
+  snapshotVal: { fontSize: 13, fontWeight: '700', color: '#00D4FF' },
+
+  waitingText: { fontSize: 12, color: '#4A6080', textAlign: 'center', marginTop: 4 },
+
+  quickConnectWrap: { alignItems: 'center', gap: 10 },
+  quickConnectHint: { fontSize: 12, color: '#8BA4C0', textAlign: 'center' },
+  quickConnectBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#00FF9C', borderRadius: 10,
+    paddingVertical: 12, paddingHorizontal: 20,
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#8BA4C0',
-    marginTop: 6,
-  },
+  quickConnectBtnText: { fontSize: 14, fontWeight: '800', color: '#0A0E1A' },
+
+  // Generic card
   card: {
-    backgroundColor: '#141D35',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#1E2D4A',
+    backgroundColor: '#141D35', borderRadius: 14,
+    padding: 18, marginBottom: 16,
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  cardTitle:  { fontSize: 15, fontWeight: '700', color: '#E8F4FD' },
+  cardDesc:   { fontSize: 12, color: '#8BA4C0', lineHeight: 18, marginBottom: 14 },
+
+  // QR
+  qrBox: {
+    height: 230, borderRadius: 12, overflow: 'hidden',
+    backgroundColor: '#0F1629', borderWidth: 1, borderColor: '#1E2D4A',
+    marginBottom: 14, position: 'relative',
   },
-  cardTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#E8F4FD',
-    marginLeft: 10,
-  },
-  cardDescription: {
-    fontSize: 13,
-    color: '#8BA4C0',
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 10,
-  },
-  statusText: {
-    fontSize: 14,
-    color: '#8BA4C0',
-  },
-  snapshotRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  snapshotBadge: {
-    flex: 1,
-    backgroundColor: '#0F1629',
-    borderRadius: 8,
-    padding: 10,
-    marginHorizontal: 3,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#1E2D4A',
-  },
-  snapshotLabel: {
-    fontSize: 9,
-    color: '#4A6080',
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  snapshotValue: {
-    fontSize: 12,
-    color: '#00D4FF',
-    fontWeight: '700',
-  },
-  disconnectButton: {
-    flexDirection: 'row',
-    backgroundColor: '#FF3D5A',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 14,
-  },
-  disconnectButtonText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  qrContainer: {
-    height: 260,
-    marginBottom: 16,
-    borderRadius: 12,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#1E2D4A',
-  },
-  cameraContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  camera: {
-    flex: 1,
-  },
-  scannerOverlay: {
+  qrOverlay: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center',
   },
-  scannerFrame: {
-    width: 180,
-    height: 180,
-    position: 'relative',
+  qrFrame: { width: 160, height: 160, position: 'relative' },
+  qrCorner: {
+    position: 'absolute', width: 24, height: 24, borderColor: '#00D4FF',
   },
-  corner: {
-    position: 'absolute',
-    width: 28,
-    height: 28,
-    borderColor: '#00D4FF',
+  qrTop:    { top: 0,    borderTopWidth: 3 },
+  qrBottom: { bottom: 0, borderBottomWidth: 3 },
+  qrLeft:   { left: 0,  borderLeftWidth: 3 },
+  qrRight:  { right: 0, borderRightWidth: 3 },
+  qrHint:   { color: 'white', fontSize: 12, marginTop: 20, fontWeight: '500' },
+  qrPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  qrPlaceholderText: { fontSize: 12, color: '#4A6080', marginTop: 10 },
+
+  // Buttons
+  btn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#00D4FF', borderRadius: 10,
+    paddingVertical: 13, gap: 8,
   },
-  cornerTopLeft:     { top: 0,    left: 0,    borderTopWidth: 3, borderLeftWidth: 3,   borderTopLeftRadius: 10 },
-  cornerTopRight:    { top: 0,    right: 0,   borderTopWidth: 3, borderRightWidth: 3,  borderTopRightRadius: 10 },
-  cornerBottomLeft:  { bottom: 0, left: 0,    borderBottomWidth: 3, borderLeftWidth: 3,  borderBottomLeftRadius: 10 },
-  cornerBottomRight: { bottom: 0, right: 0,   borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 10 },
-  scannerText: {
-    marginTop: 24,
-    fontSize: 14,
-    color: 'white',
-    fontWeight: '500',
-  },
-  qrPlaceholder: {
-    flex: 1,
-    backgroundColor: '#0F1629',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#4A6080',
-  },
-  scannedDataText: {
-    marginTop: 6,
-    fontSize: 12,
-    color: '#00D4FF',
-    fontWeight: '500',
-    paddingHorizontal: 16,
-  },
-  scanButton: {
-    flexDirection: 'row',
-    backgroundColor: '#00D4FF',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scanButtonText: {
-    color: '#0A0E1A',
-    fontSize: 15,
-    fontWeight: '700',
-    marginLeft: 10,
-  },
-  scanButtonActive: {
-    backgroundColor: '#FF3D5A',
-  },
-  scanButtonDisabled: {
-    backgroundColor: '#4A6080',
-    opacity: 0.7,
-  },
+  btnRed:      { backgroundColor: '#FF3D5A' },
+  btnDisabled: { backgroundColor: '#1E2D4A', opacity: 0.6 },
+  btnText:     { fontSize: 14, fontWeight: '700', color: '#0A0E1A' },
+
+  // Input
   input: {
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#1E2D4A',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    marginBottom: 14,
-    fontSize: 15,
-    color: '#E8F4FD',
-    backgroundColor: '#0F1629',
+    backgroundColor: '#0F1629', borderWidth: 1, borderColor: '#1E2D4A',
+    borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
+    fontSize: 14, color: '#E8F4FD', marginBottom: 10,
   },
-  helpItem: {
-    flexDirection: 'row',
-    marginBottom: 18,
+
+  // Help
+  helpItem:    { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  helpIconWrap:{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#0F1629', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#1E2D4A' },
+  helpContent: { flex: 1 },
+  helpTitle:   { fontSize: 13, fontWeight: '600', color: '#E8F4FD', marginBottom: 3 },
+  helpDesc:    { fontSize: 12, color: '#8BA4C0', lineHeight: 18 },
+
+  // error banner
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: 'rgba(255,61,90,0.1)',
+    borderRadius: 10, padding: 12, marginBottom: 14,
+    borderWidth: 1, borderColor: 'rgba(255,61,90,0.3)',
   },
-  helpIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#0F1629',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-    borderWidth: 1,
-    borderColor: '#1E2D4A',
-  },
-  helpContent: {
-    flex: 1,
-  },
-  helpTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#E8F4FD',
-    marginBottom: 3,
-  },
-  helpDescription: {
-    fontSize: 13,
-    color: '#8BA4C0',
-    lineHeight: 19,
-  },
+  errorText: { flex: 1, fontSize: 12, color: '#FF3D5A', lineHeight: 18 },
 });

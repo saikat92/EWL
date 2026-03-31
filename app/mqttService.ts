@@ -1,12 +1,11 @@
-// mqttService.ts
 import mqtt, { MqttClient } from "mqtt";
 
 let client: MqttClient | null = null;
 
-const BROKER_URL  = "mqtt://192.168.4.1:1883";
+// WebSocket port — React Native mqtt uses WS, not raw TCP
+const BROKER_URL     = "ws://192.168.4.1:9001";
 const SNAPSHOT_TOPIC = "eclean/status/snapshot";
 
-// ── Topic map: command name → Pi topic ──────────────────────────────────────
 const TOPIC_MAP: Record<string, string> = {
   state:     "eclean/control/state",
   speed:     "eclean/control/speed",
@@ -17,59 +16,100 @@ const TOPIC_MAP: Record<string, string> = {
   estop:     "eclean/control/estop",
 };
 
-// ── Connect ──────────────────────────────────────────────────────────────────
+// ── Connect ───────────────────────────────────────────────────────────────────
 export function connectMQTT(
-  onStatus: (data: PiSnapshot) => void,
-  onConnected?: () => void
+  onStatus:    (data: PiSnapshot) => void,
+  onConnected?: () => void,
+  onError?:    (err: string) => void,
 ) {
-  if (client?.connected) return;
+  // Destroy stale client
+  if (client) {
+    try { client.end(true); } catch {}
+    client = null;
+  }
+
+  console.log(`[MQTT] Connecting to ${BROKER_URL}`);
 
   client = mqtt.connect(BROKER_URL, {
-    clientId: "ecleaning_android_" + Math.random().toString(16).substr(2, 8),
-    clean: true,
-    connectTimeout: 4000,
-    reconnectPeriod: 3000,
+    clientId:        "ecleaning_android_" + Math.random().toString(16).slice(2, 10),
+    clean:           true,
+    connectTimeout:  6000,
+    reconnectPeriod: 0,        // disable auto-reconnect — we handle it manually
+    keepalive:       30,
   });
 
   client.on("connect", () => {
-    console.log("[MQTT] Connected to broker");
-    // Subscribe to Pi status snapshots
-    client?.subscribe(SNAPSHOT_TOPIC, (err) => {
+    console.log("[MQTT] ✓ Connected");
+    client?.subscribe(SNAPSHOT_TOPIC, { qos: 1 }, (err) => {
       if (err) console.error("[MQTT] Subscribe error:", err);
+      else console.log("[MQTT] Subscribed to", SNAPSHOT_TOPIC);
     });
-    // Send a handshake so Pi QR screen advances immediately
+    // Send handshake so Pi QR screen knows Android is present
     publishRaw("eclean/control/state", { value: "Machine On" });
     onConnected?.();
   });
 
   client.on("message", (topic, message) => {
+    console.log("[MQTT] Message on", topic, ":", message.toString().slice(0, 80));
     if (topic === SNAPSHOT_TOPIC) {
       try {
-        const raw = JSON.parse(message.toString());
-        // Map Pi field names → app field names
-        const mapped: PiSnapshot = mapSnapshot(raw);
+        const raw    = JSON.parse(message.toString());
+        const mapped = mapSnapshot(raw);
         onStatus(mapped);
       } catch (e) {
-        console.error("[MQTT] Bad JSON:", e);
+        console.error("[MQTT] JSON parse error:", e);
       }
     }
   });
 
-  client.on("error", (err) => console.error("[MQTT] Error:", err));
-  client.on("close", () => console.log("[MQTT] Connection closed"));
+  client.on("error", (err) => {
+    console.error("[MQTT] Error:", err.message);
+    onError?.(err.message);
+  });
+
+  client.on("close", () => {
+    console.log("[MQTT] Connection closed");
+  });
+
+  client.on("offline", () => {
+    console.log("[MQTT] Client offline");
+  });
 }
 
-// ── Send typed command to correct Pi topic ───────────────────────────────────
+// ── Send command ──────────────────────────────────────────────────────────────
 export function sendCommand(type: keyof typeof TOPIC_MAP, value: any) {
   const topic = TOPIC_MAP[type];
   if (!topic) {
-    console.warn(`[MQTT] Unknown command type: ${type}`);
+    console.warn(`[MQTT] Unknown command type: "${type}"`);
     return;
   }
-  publishRaw(topic, { value, timestamp: new Date().toISOString() });
+  if (!client) {
+    console.warn("[MQTT] No client instance");
+    return;
+  }
+  if (!client.connected) {
+    console.warn("[MQTT] Client not connected — command dropped:", type, value);
+    return;
+  }
+  const payload = JSON.stringify({ value, timestamp: new Date().toISOString() });
+  console.log(`[MQTT] → ${topic}:`, payload);
+  client.publish(topic, payload, { qos: 1 });
 }
 
-// ── Convenience commands ─────────────────────────────────────────────────────
+// ── Disconnect ────────────────────────────────────────────────────────────────
+export function disconnectMQTT() {
+  if (client) {
+    try { client.end(true); } catch {}
+    client = null;
+    console.log("[MQTT] Disconnected");
+  }
+}
+
+export function isMQTTConnected(): boolean {
+  return client?.connected === true;
+}
+
+// ── DeviceCommands ────────────────────────────────────────────────────────────
 export const DeviceCommands = {
   machineOn:        () => sendCommand("state",     "Machine On"),
   machineOff:       () => sendCommand("state",     "Idle"),
@@ -79,34 +119,19 @@ export const DeviceCommands = {
   conveyorStop:     () => sendCommand("state",     "Conveyor Stopped"),
   uvOn:             () => sendCommand("uv",        "on"),
   uvOff:            () => sendCommand("uv",        "off"),
-  setSpeed:   (rpm: number) => sendCommand("speed", rpm),
+  setSpeed:   (rpm: number) => sendCommand("speed",     rpm),
   setForward:       () => sendCommand("direction", "FORWARD"),
   setBackward:      () => sendCommand("direction", "BACKWARD"),
   setVegetable: (v: string) => sendCommand("vegetable", v),
-  setDuration: (s: number) => sendCommand("duration", s),
+  setDuration:  (s: number) => sendCommand("duration",  s),
   cleaningStart:    () => sendCommand("state",     "Cleaning Started"),
   cleaningComplete: () => sendCommand("state",     "Cleaning completes. Collect Packet"),
   restart:          () => sendCommand("state",     "Restarting system..."),
   estop:            () => sendCommand("estop",     "1"),
 };
 
-export function disconnectMQTT() {
-  client?.end();
-  client = null;
-}
-
-// ── Internal ─────────────────────────────────────────────────────────────────
-function publishRaw(topic: string, payload: object) {
-  if (!client?.connected) {
-    console.warn("[MQTT] Not connected — cannot publish");
-    return;
-  }
-  client.publish(topic, JSON.stringify(payload), { qos: 1 });
-}
-
-// ── Type: what Pi actually sends ─────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 export interface PiSnapshot {
-  // Mapped (app-friendly) names
   deviceState:       string;
   motorRPM:          number;
   uvActive:          boolean;
@@ -123,7 +148,6 @@ export interface PiSnapshot {
   lastUpdate:        number;
 }
 
-// Map Pi snake_case → app camelCase
 function mapSnapshot(raw: any): PiSnapshot {
   return {
     deviceState:       raw.device_state        ?? "Idle",
@@ -141,4 +165,9 @@ function mapSnapshot(raw: any): PiSnapshot {
     lastError:         raw.last_error           ?? null,
     lastUpdate:        Date.now(),
   };
+}
+
+function publishRaw(topic: string, payload: object) {
+  if (!client?.connected) return;
+  client.publish(topic, JSON.stringify(payload), { qos: 1 });
 }

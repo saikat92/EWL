@@ -4,43 +4,43 @@ import { useState } from 'react';
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import SidebarMenu from '../../components/SidebarMenu';
 
-// Right Sidebar Button Component
-const RightSidebarButton = ({ onPress }: { onPress: () => void }) => {
-  return (
-    <TouchableOpacity style={styles.sidebarButton} onPress={onPress}>
-      <Ionicons name="options" size={24} color="#007AFF" />
-    </TouchableOpacity>
-  );
-};
+const RightSidebarButton = ({ onPress }: { onPress: () => void }) => (
+  <TouchableOpacity style={styles.sidebarButton} onPress={onPress}>
+    <Ionicons name="options" size={22} color="#00D4FF" />
+  </TouchableOpacity>
+);
 
-// Custom Header Component that doesn't show title
-const CustomHeader = ({ onSidebarPress }: { onSidebarPress: () => void }) => {
-  return (
-    <View style={styles.customHeader}>
-      <View style={{ flex: 1 }} />
-      <RightSidebarButton onPress={onSidebarPress} />
-    </View>
-  );
-};
+const CustomHeader = ({ onSidebarPress }: { onSidebarPress: () => void }) => (
+  <View style={styles.customHeader}>
+    <View style={{ flex: 1 }} />
+    <RightSidebarButton onPress={onSidebarPress} />
+  </View>
+);
 
 export default function TabLayout() {
   const [isSidebarVisible, setIsSidebarVisible] = useState(false);
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: '#0A0E1A' }}>
       <Tabs
         screenOptions={{
-          tabBarActiveTintColor: '#007AFF',
-          tabBarInactiveTintColor: 'gray',
+          tabBarActiveTintColor:   '#00D4FF',
+          tabBarInactiveTintColor: '#4A6080',
           tabBarStyle: {
-            backgroundColor: '#F8F8F8',
-            borderTopWidth: 1,
-            borderTopColor: '#E5E5E5',
-            height: 60,
-            paddingBottom: 8,
-            paddingTop: 8,
+            backgroundColor:  '#0F1629',
+            borderTopWidth:   1,
+            borderTopColor:   '#1E2D4A',
+            height:           62,
+            paddingBottom:    10,
+            paddingTop:       8,
           },
-          header: () => <CustomHeader onSidebarPress={() => setIsSidebarVisible(true)} />,
+          tabBarLabelStyle: {
+            fontSize:   10,
+            fontWeight: '600',
+          },
+          header: () => (
+            <CustomHeader onSidebarPress={() => setIsSidebarVisible(true)} />
+          ),
         }}
       >
         <Tabs.Screen
@@ -73,7 +73,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="manualclean"
           options={{
-            title: 'Manual Clean',
+            title: 'Manual',
             tabBarIcon: ({ color, size }) => (
               <FontAwesome5 name="hands" size={size} color={color} />
             ),
@@ -81,10 +81,9 @@ export default function TabLayout() {
         />
       </Tabs>
 
-      {/* Sidebar Menu */}
-      <SidebarMenu 
-        isVisible={isSidebarVisible} 
-        onClose={() => setIsSidebarVisible(false)} 
+      <SidebarMenu
+        isVisible={isSidebarVisible}
+        onClose={() => setIsSidebarVisible(false)}
       />
     </View>
   );
@@ -92,19 +91,22 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   sidebarButton: {
-    marginRight: 16,
-    padding: 8,
+    marginRight: 14,
+    padding:     8,
     borderRadius: 20,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#141D35',
+    borderWidth: 1,
+    borderColor: '#1E2D4A',
   },
   customHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    height: 60,
-    backgroundColor: '#F8F8F8',
+    flexDirection:    'row',
+    alignItems:       'center',
+    justifyContent:   'flex-end',
+    height:           56,
+    backgroundColor:  '#0F1629',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5E5',
+    borderBottomColor: '#1E2D4A',
     paddingHorizontal: 16,
+    paddingTop: 0,
   },
 });

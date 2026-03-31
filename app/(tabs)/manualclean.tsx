@@ -8,413 +8,317 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
-import { API } from '../gpioService';
-import { sendCommand } from "../mqttService";
+import { DeviceCommands, sendCommand } from '../mqttService';
 
-
-// Helper function to format time
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const formatTime = (seconds: number) => {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
 
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function ManualCleanScreen() {
-  const [motorSpeed, setMotorSpeed] = useState('75');
-  const [motorRunning, setMotorRunning] = useState(false);
-  const [uvOn, setUvOn] = useState(false);
-  const [motorTime, setMotorTime] = useState(0);
-  const [uvTime, setUvTime] = useState(0);
-  const [showEmergencyModal, setShowEmergencyModal] = useState(false);
-  const [showConfirmStop, setShowConfirmStop] = useState(false);
-  const [rpmInputFocused, setRpmInputFocused] = useState(false);
-  const [conveyorOn, setConveyorOn] = useState(false);
-  const [conveyorTime, setConveyorTime] = useState(0);
+  const [rpm,             setRpm]             = useState(60);
+  const [direction,       setDirection]       = useState<'FORWARD' | 'BACKWARD'>('FORWARD');
+  const [conveyorOn,      setConveyorOn]      = useState(false);
+  const [uvOn,            setUvOn]            = useState(false);
+  const [conveyorTime,    setConveyorTime]    = useState(0);
+  const [uvTime,          setUvTime]          = useState(0);
+  const [showEstop,       setShowEstop]       = useState(false);
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
 
-  // Timer effects
+  // ── Timers ────────────────────────────────────────────────────────────────
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (motorRunning) {
-      timer = setTimeout(() => setMotorTime(motorTime + 1), 1000);
-    }
-    return () => clearTimeout(timer);
-  }, [motorRunning, motorTime]);
+    if (!conveyorOn) return;
+    const t = setTimeout(() => setConveyorTime((v) => v + 1), 1000);
+    return () => clearTimeout(t);
+  }, [conveyorOn, conveyorTime]);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (uvOn) {
-      timer = setTimeout(() => setUvTime(uvTime + 1), 1000);
-    }
-    return () => clearTimeout(timer);
+    if (!uvOn) return;
+    const t = setTimeout(() => setUvTime((v) => v + 1), 1000);
+    return () => clearTimeout(t);
   }, [uvOn, uvTime]);
 
-  // Add timer effect for conveyor
-useEffect(() => {
-  let timer: NodeJS.Timeout;
-  if (conveyorOn) {
-    timer = setTimeout(() => setConveyorTime(conveyorTime + 1), 1000);
-  }
-  return () => clearTimeout(timer);
-}, [conveyorOn, conveyorTime]);
+  // ── MQTT actions ──────────────────────────────────────────────────────────
 
-  // Update toggleConveyor function to call API
-    const toggleConveyor = async () => {
-      try {
-        const action = conveyorOn ? 'stop' : 'start';
-        await API.controlConveyor(action);
-        setConveyorOn(!conveyorOn);
-      } catch (error) {
-        Alert.alert('Error', 'Failed to control conveyor');
-        setConveyorOn(conveyorOn);
-      }
-    };
-
-
-  const handleRpmChange = (text: string) => {
-    // Only allow numbers
-    const numericText = text.replace(/[^0-9]/g, '');
-    if (numericText === '' || (parseInt(numericText) >= 10 && parseInt(numericText) <= 1800)) {
-      setMotorSpeed(numericText);
-    }
-  };
-
-  const toggleMotor = async () => {
-    if (motorRunning) {
-      setShowConfirmStop(true);
+  const toggleConveyor = () => {
+    if (conveyorOn) {
+      setShowStopConfirm(true);
     } else {
-      // For now, just toggle local state since speed control is design-only
-      setMotorRunning(true);
+      setConveyorOn(true);
+      DeviceCommands.manualCleaning();
+      sendCommand('direction', direction);
+      sendCommand('speed', rpm);
+      DeviceCommands.conveyorStart();
     }
   };
 
-  // Update toggleUV function to call API
-  const toggleUV = async () => {
-    try {
-      const action = uvOn ? 'off' : 'on';
-      await API.controlUVLight(action);
-      setUvOn(!uvOn);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to control UV light');
-      // Revert UI state on error
-      setUvOn(uvOn);
+  const confirmStopConveyor = () => {
+    setConveyorOn(false);
+    setShowStopConfirm(false);
+    DeviceCommands.conveyorStop();
+    sendCommand('speed', 0);
+  };
+
+  const toggleUV = () => {
+    const next = !uvOn;
+    setUvOn(next);
+    if (next) {
+      DeviceCommands.uvOn();
+    } else {
+      DeviceCommands.uvOff();
     }
   };
 
-  // Update emergency stop to call API
-  const handleEmergencyStop = async () => {
-    try {
-      await API.emergencyStop();
-      setMotorRunning(false);
-      setUvOn(false);
-      setConveyorOn(false);
-      setShowEmergencyModal(false);
-      Alert.alert("Emergency Stop", "All operations have been stopped.");
-    } catch (error) {
-      Alert.alert('Error', 'Failed to execute emergency stop');
+  const applySpeed = () => {
+    if (conveyorOn) {
+      sendCommand('speed', rpm);
     }
   };
 
+  const setConveyorDirection = (dir: 'FORWARD' | 'BACKWARD') => {
+    setDirection(dir);
+    if (conveyorOn) {
+      sendCommand('direction', dir);
+    }
+  };
+
+  const handleEmergencyStop = () => {
+    setConveyorOn(false);
+    setUvOn(false);
+    setShowEstop(false);
+    DeviceCommands.estop();
+    Alert.alert('Emergency Stop', 'All operations halted.');
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Header */}
       <View style={styles.header}>
-        <MaterialCommunityIcons name="hand-pointing-right" size={32} color="#3498db" />
-        <Text style={styles.title}>Manual Cleaning</Text>
-        <Text style={styles.subtitle}>Full control over cleaning parameters</Text>
+        <MaterialCommunityIcons name="hand-pointing-right" size={34} color="#FFB800" />
+        <Text style={styles.title}>Manual Control</Text>
+        <Text style={styles.subtitle}>Direct control over all device parameters</Text>
       </View>
 
-     
-      {/* UV Lamp Control Card */}
+      {/* ── UV Lamp Card ── */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="lightbulb-on" size={24} color="#3498db" />
-          <Text style={styles.cardTitle}>UV Lamp Control</Text>
+          <MaterialCommunityIcons name="lightbulb-on-outline" size={22} color="#00D4FF" />
+          <Text style={styles.cardTitle}>UV-C Lamp</Text>
+          <View style={[styles.liveBadge, uvOn && styles.liveBadgeOn]}>
+            <View style={[styles.liveDot, uvOn && styles.liveDotOn]} />
+            <Text style={[styles.liveText, uvOn && { color: '#00D4FF' }]}>
+              {uvOn ? 'ACTIVE' : 'INACTIVE'}
+            </Text>
+          </View>
         </View>
-        
-        <View style={styles.uvStatus}>
-          <MaterialCommunityIcons 
-            name={uvOn ? "lightbulb-on" : "lightbulb-off"} 
-            size={40} 
-            color={uvOn ? "#f1c40f" : "#bdc3c7"} 
+
+        {/* UV glow indicator */}
+        <View style={[styles.uvGlow, uvOn && styles.uvGlowOn]}>
+          <MaterialCommunityIcons
+            name={uvOn ? 'lightbulb-on' : 'lightbulb-off-outline'}
+            size={48}
+            color={uvOn ? '#00D4FF' : '#1E2D4A'}
           />
-          <Text style={[styles.uvStatusText, uvOn && { color: "#f1c40f" }]}>
-            {uvOn ? "UV LAMP ACTIVE" : "UV LAMP INACTIVE"}
+          <Text style={[styles.uvGlowText, uvOn && { color: '#00D4FF' }]}>
+            {uvOn ? 'UV LAMP ACTIVE' : 'UV LAMP OFF'}
           </Text>
         </View>
-        
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={[
-              styles.toggleButton,
-              uvOn ? styles.toggleButtonOn : styles.toggleButtonOff,
-              uvOn && { backgroundColor: '#f1c40f' }
-            ]}
-            onPress={() => sendCommand(uvOn ? "uv_off" : "uv_on")} // Replace with toggleUV when API is ready
-            disabled={showEmergencyModal}
-          >
-            <MaterialCommunityIcons 
-              name={uvOn ? "power-plug" : "power-plug-off"} 
-              size={24} 
-              color="white" 
-            />
-            <Text style={styles.toggleButtonText}>
-              {uvOn ? "TURN OFF" : "TURN ON"}
-            </Text>
-          </TouchableOpacity>
-          
-          <View style={styles.timerContainer}>
-            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
-            <Text style={styles.timerText}>{formatTime(uvTime)}</Text>
-          </View>
-        </View>
-      </View>
 
-      {/* Add Conveyor Control Card (after UV Lamp Control Card)*/}
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-            <MaterialCommunityIcons name="blur-linear" size={24} color="#3498db" />
-          <Text style={styles.cardTitle}>Conveyor Control</Text>
-        </View>
-        
-        <View style={styles.uvStatus}>
-          <MaterialCommunityIcons 
-            name={conveyorOn ? "blur-linear" : "blur-radial"} 
-            size={40} 
-            color={conveyorOn ? "#2ecc71" : "#bdc3c7"} 
-          />
-          <Text style={[styles.uvStatusText, conveyorOn && { color: "#2ecc71" }]}>
-            {conveyorOn ? "CONVEYOR ACTIVE" : "CONVEYOR INACTIVE"}
-          </Text>
-        </View>
-        
-        
-        {/* RPM Input Field */}
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Speed Control</Text>
-          </View>
-          
-          <View style={styles.controlRow}>
-            <Text style={styles.controlLabel}>Motor Speed</Text>
-            <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
-          </View>
-          
-          {/* Replace TextInput with Slider */}
-          <View style={styles.sliderContainer}>
-            <Slider
-              style={styles.slider}
-              minimumValue={10}
-              maximumValue={1800}
-              step={1}
-              value={parseInt(motorSpeed)}
-              onValueChange={(value) => setMotorSpeed(value.toString())}
-              minimumTrackTintColor="#3498db"
-              maximumTrackTintColor="#ecf0f1"
-              thumbTintColor="#3498db"
-              disabled={motorRunning}
-            />
-            <View style={styles.sliderLabels}>
-              <Text style={styles.sliderLabel}>10 RPM</Text>
-              <Text style={styles.sliderLabel}>1800 RPM</Text>
-            </View>
-          </View>
-        </View>
-        
-        <View style={styles.buttonRow}>
-          <TouchableOpacity
-            style={[
-              styles.toggleButton,
-              conveyorOn ? styles.toggleButtonOn : styles.toggleButtonOff,
-              conveyorOn && { backgroundColor: '#2ecc71' }
-            ]}
-            onPress={() => sendCommand(conveyorOn ? "conv_off" : "conv_on")} // Replace with toggleConveyor when API is ready
-            disabled={showEmergencyModal}
-          >
-            <MaterialCommunityIcons 
-              name={conveyorOn ? "power-plug" : "power-plug-off"} 
-              size={24} 
-              color="white" 
-            />
-            <Text style={styles.toggleButtonText}>
-              {conveyorOn ? "TURN OFF" : "TURN ON"}
-            </Text>
-          </TouchableOpacity>
-          
-          <View style={styles.timerContainer}>
-            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
-            <Text style={styles.timerText}>{formatTime(conveyorTime)}</Text>
-          </View>
-        </View>
-
-      </View>
-
-       {/* Motor Control Card */}
-      {/* <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="engine" size={24} color="#3498db" />
-          <Text style={styles.cardTitle}>Motor Control</Text>
-        </View>
-        
         <View style={styles.controlRow}>
-          <Text style={styles.controlLabel}>Motor Speed (RPM)</Text>
-          <Text style={styles.rpmValue}>{motorSpeed} RPM</Text>
-        </View>
-        
-        
-        
-        <View style={styles.buttonRow}>
           <TouchableOpacity
-            style={[
-              styles.toggleButton,
-              motorRunning ? styles.toggleButtonOn : styles.toggleButtonOff,
-              motorRunning && { backgroundColor: '#2ecc71' }
-            ]}
-            onPress={toggleMotor}
-            disabled={showEmergencyModal}
+            style={[styles.controlBtn, uvOn && styles.controlBtnActive]}
+            onPress={toggleUV}
+            disabled={showEstop}
           >
-            <MaterialCommunityIcons 
-              name={motorRunning ? "motion-sensor" : "motion-off"} 
-              size={24} 
-              color="white" 
+            <MaterialCommunityIcons
+              name={uvOn ? 'power-plug-off' : 'power-plug'}
+              size={20}
+              color={uvOn ? '#0A0E1A' : '#00D4FF'}
             />
-            <Text style={styles.toggleButtonText}>
-              {motorRunning ? "RUNNING" : "START MOTOR"}
+            <Text style={[styles.controlBtnText, uvOn && { color: '#0A0E1A' }]}>
+              {uvOn ? 'TURN OFF' : 'TURN ON'}
             </Text>
           </TouchableOpacity>
-          
-          <View style={styles.timerContainer}>
-            <MaterialCommunityIcons name="timer" size={20} color="#7f8c8d" />
-            <Text style={styles.timerText}>{formatTime(motorTime)}</Text>
-          </View>
-        </View>
-      </View> */}
 
-
-      {/* Emergency Stop Section */}
-      <View style={styles.emergencySection}>
-        <TouchableOpacity
-          style={styles.emergencyButton}
-          onPress={() => setShowEmergencyModal(true)}
-        >
-          <MaterialCommunityIcons name="alert-octagon" size={32} color="white" />
-          <Text style={styles.emergencyText}>EMERGENCY STOP</Text>
-        </TouchableOpacity>
-        <Text style={styles.emergencyHint}>Press only in critical situations</Text>
-      </View>
-
-      {/* Status Indicators */}
-      <View style={styles.statusCard}>
-        <View style={styles.statusRow}>
-          <View style={styles.statusItem}>
-            <MaterialCommunityIcons 
-              name="engine" 
-              size={24} 
-              color={motorRunning ? "#2ecc71" : "#e74c3c"} 
-            />
-            <Text style={styles.statusLabel}>Motor</Text>
-            <Text style={styles.statusValue}>
-              {motorRunning ? "Running" : "Stopped"}
-            </Text>
-          </View>
-          
-          <View style={styles.statusItem}>
-            <MaterialCommunityIcons 
-              name="lightbulb-on" 
-              size={24} 
-              color={uvOn ? "#f1c40f" : "#7f8c8d"} 
-            />
-            <Text style={styles.statusLabel}>UV Lamp</Text>
-            <Text style={styles.statusValue}>
-              {uvOn ? "Active" : "Inactive"}
-            </Text>
-          </View>
-          
-          <View style={styles.statusItem}>
-            <MaterialCommunityIcons 
-              name="shield-check" 
-              size={24} 
-              color="#2ecc71" 
-            />
-            <Text style={styles.statusLabel}>System</Text>
-            <Text style={styles.statusValue}>
-              {showEmergencyModal ? "Emergency" : "Normal"}
-            </Text>
+          <View style={styles.timerBadge}>
+            <MaterialCommunityIcons name="timer-outline" size={16} color="#4A6080" />
+            <Text style={styles.timerBadgeText}>{formatTime(uvTime)}</Text>
           </View>
         </View>
       </View>
 
-      {/* Emergency Stop Confirmation Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={showEmergencyModal}
-        onRequestClose={() => setShowEmergencyModal(false)}
+      {/* ── Conveyor Card ── */}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <MaterialCommunityIcons name="arrow-right-bold-box" size={22} color="#00FF9C" />
+          <Text style={styles.cardTitle}>Conveyor Belt</Text>
+          <View style={[styles.liveBadge, conveyorOn && styles.liveBadgeConveyor]}>
+            <View style={[styles.liveDot, conveyorOn && styles.liveDotConveyor]} />
+            <Text style={[styles.liveText, conveyorOn && { color: '#00FF9C' }]}>
+              {conveyorOn ? direction : 'STOPPED'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Speed slider */}
+        <View style={styles.sliderSection}>
+          <View style={styles.sliderHeader}>
+            <Text style={styles.sliderLabel}>Motor Speed</Text>
+            <Text style={styles.sliderValue}>{rpm} RPM</Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={10}
+            maximumValue={120}
+            step={1}
+            value={rpm}
+            onValueChange={(v) => setRpm(Math.round(v))}
+            onSlidingComplete={applySpeed}
+            minimumTrackTintColor="#00FF9C"
+            maximumTrackTintColor="#1E2D4A"
+            thumbTintColor="#00FF9C"
+            disabled={!conveyorOn}
+          />
+          <View style={styles.sliderRange}>
+            <Text style={styles.sliderRangeText}>10 RPM</Text>
+            <Text style={styles.sliderRangeText}>120 RPM</Text>
+          </View>
+        </View>
+
+        {/* Direction selector */}
+        <View style={styles.directionRow}>
+          <TouchableOpacity
+            style={[styles.dirBtn, direction === 'FORWARD' && styles.dirBtnActive]}
+            onPress={() => setConveyorDirection('FORWARD')}
+          >
+            <MaterialCommunityIcons
+              name="arrow-right"
+              size={18}
+              color={direction === 'FORWARD' ? '#0A0E1A' : '#8BA4C0'}
+            />
+            <Text style={[styles.dirBtnText, direction === 'FORWARD' && { color: '#0A0E1A' }]}>
+              Forward
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.dirBtn, direction === 'BACKWARD' && styles.dirBtnReverse]}
+            onPress={() => setConveyorDirection('BACKWARD')}
+          >
+            <MaterialCommunityIcons
+              name="arrow-left"
+              size={18}
+              color={direction === 'BACKWARD' ? '#0A0E1A' : '#8BA4C0'}
+            />
+            <Text style={[styles.dirBtnText, direction === 'BACKWARD' && { color: '#0A0E1A' }]}>
+              Reverse
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.controlRow}>
+          <TouchableOpacity
+            style={[styles.controlBtn, conveyorOn && styles.controlBtnStop]}
+            onPress={toggleConveyor}
+            disabled={showEstop}
+          >
+            <MaterialCommunityIcons
+              name={conveyorOn ? 'stop-circle' : 'play-circle'}
+              size={20}
+              color={conveyorOn ? 'white' : '#00FF9C'}
+            />
+            <Text style={[
+              styles.controlBtnText,
+              conveyorOn ? { color: 'white' } : { color: '#00FF9C' },
+            ]}>
+              {conveyorOn ? 'STOP BELT' : 'START BELT'}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.timerBadge}>
+            <MaterialCommunityIcons name="timer-outline" size={16} color="#4A6080" />
+            <Text style={styles.timerBadgeText}>{formatTime(conveyorTime)}</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* ── Status summary ── */}
+      <View style={styles.summaryCard}>
+        {[
+          { label: 'UV Lamp',   value: uvOn ? 'ON' : 'OFF',        color: uvOn ? '#00D4FF' : '#4A6080' },
+          { label: 'Conveyor',  value: conveyorOn ? 'ON' : 'OFF',  color: conveyorOn ? '#00FF9C' : '#4A6080' },
+          { label: 'Speed',     value: `${rpm} RPM`,               color: '#FFB800' },
+          { label: 'Direction', value: direction,                   color: '#8B5CF6' },
+        ].map((item, i) => (
+          <View key={i} style={styles.summaryItem}>
+            <Text style={styles.summaryLabel}>{item.label}</Text>
+            <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* ── Emergency Stop ── */}
+      <TouchableOpacity
+        style={styles.estopBtn}
+        onPress={() => setShowEstop(true)}
       >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <MaterialCommunityIcons name="alert-octagon" size={60} color="#e74c3c" />
-            <Text style={styles.modalTitle}>EMERGENCY STOP</Text>
-            <Text style={styles.modalText}>
-              This will immediately stop all operations. Are you sure you want to proceed?
-            </Text>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowEmergencyModal(false)}
+        <MaterialCommunityIcons name="alert-octagon" size={24} color="white" />
+        <Text style={styles.estopText}>EMERGENCY STOP</Text>
+      </TouchableOpacity>
+      <Text style={styles.estopHint}>Immediately halts all motors and UV lamp</Text>
+
+      {/* ── Stop Conveyor Confirm Modal ── */}
+      <Modal transparent animationType="fade" visible={showStopConfirm}
+        onRequestClose={() => setShowStopConfirm(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <MaterialCommunityIcons name="stop-circle-outline" size={48} color="#FFB800" />
+            <Text style={styles.modalTitle}>Stop Conveyor?</Text>
+            <Text style={styles.modalText}>The conveyor belt will stop moving.</Text>
+            <View style={styles.modalBtns}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setShowStopConfirm(false)}
               >
-                <Text style={styles.modalButtonText}>Cancel</Text>
+                <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.emergencyModalButton]}
-                onPress={() => {
-                  handleEmergencyStop();
-                  setShowEmergencyModal(false);
-                  sendCommand("stop");
-                }}
-              >
-                <Text style={styles.modalButtonText}>Confirm Stop</Text>
+              <TouchableOpacity style={styles.modalWarn} onPress={confirmStopConveyor}>
+                <Text style={styles.modalWarnText}>Stop</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Confirm Motor Stop Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={showConfirmStop}
-        onRequestClose={() => setShowConfirmStop(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <MaterialCommunityIcons name="engine-off" size={60} color="#3498db" />
-            <Text style={styles.modalTitle}>Stop Motor?</Text>
+      {/* ── Emergency Modal ── */}
+      <Modal transparent animationType="fade" visible={showEstop}
+        onRequestClose={() => setShowEstop(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <MaterialCommunityIcons name="alert-octagon" size={56} color="#FF3D5A" />
+            <Text style={styles.modalTitle}>Emergency Stop</Text>
             <Text style={styles.modalText}>
-              Are you sure you want to stop the motor?
+              This will immediately halt the conveyor and UV lamp. Confirm?
             </Text>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowConfirmStop(false)}
+            <View style={styles.modalBtns}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setShowEstop(false)}
               >
-                <Text style={styles.modalButtonText}>Cancel</Text>
+                <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={() => {
-                  setMotorRunning(false);
-                  setShowConfirmStop(false);
-                  sendCommand("conv_off");  
-                }}
-              >
-                <Text style={styles.modalButtonText}>Stop Motor</Text>
+              <TouchableOpacity style={styles.modalEstop} onPress={handleEmergencyStop}>
+                <Text style={styles.modalEstopText}>STOP ALL</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -424,269 +328,123 @@ useEffect(() => {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#BAB86C',
-  },
-  contentContainer: {
-    padding: 16,
-    paddingBottom: 30,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#2c3e50',
-    marginTop: 12,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    marginTop: 8,
-  },
+  container: { flex: 1, backgroundColor: '#0A0E1A' },
+  content:   { padding: 16, paddingBottom: 40 },
+
+  header:   { alignItems: 'center', paddingTop: 16, marginBottom: 24 },
+  title:    { fontSize: 26, fontWeight: '800', color: '#E8F4FD', marginTop: 10 },
+  subtitle: { fontSize: 13, color: '#8BA4C0', marginTop: 4 },
+
   card: {
-    backgroundColor: '#ebebbb',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 3,
+    backgroundColor: '#141D35',
+    borderRadius: 14,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#1E2D4A',
   },
   cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
+    flexDirection: 'row', alignItems: 'center', marginBottom: 16, gap: 10,
   },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginLeft: 12,
+  cardTitle: { fontSize: 16, fontWeight: '700', color: '#E8F4FD', flex: 1 },
+
+  liveBadge: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#0F1629', borderRadius: 20,
+    paddingVertical: 4, paddingHorizontal: 10, gap: 5,
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  controlRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
+  liveBadgeOn:      { borderColor: '#00D4FF', backgroundColor: 'rgba(0,212,255,0.08)' },
+  liveBadgeConveyor:{ borderColor: '#00FF9C', backgroundColor: 'rgba(0,255,156,0.08)' },
+  liveDot:          { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4A6080' },
+  liveDotOn:        { backgroundColor: '#00D4FF' },
+  liveDotConveyor:  { backgroundColor: '#00FF9C' },
+  liveText:         { fontSize: 10, fontWeight: '700', color: '#4A6080', letterSpacing: 0.5 },
+
+  uvGlow: {
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#0F1629', borderRadius: 12,
+    paddingVertical: 20, marginBottom: 16,
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  controlLabel: {
-    fontSize: 16,
-    color: '#2c3e50',
+  uvGlowOn:   { borderColor: '#00D4FF', backgroundColor: 'rgba(0,212,255,0.06)' },
+  uvGlowText: { fontSize: 13, fontWeight: '700', color: '#4A6080', marginTop: 8 },
+
+  controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+
+  controlBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: '#00D4FF',
+    borderRadius: 10, paddingVertical: 12, paddingHorizontal: 20,
+    flex: 1, marginRight: 12, justifyContent: 'center',
   },
-  rpmValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#3498db',
+  controlBtnActive: { backgroundColor: '#00D4FF', borderColor: '#00D4FF' },
+  controlBtnStop:   { backgroundColor: '#FF3D5A', borderColor: '#FF3D5A' },
+  controlBtnText:   { fontSize: 13, fontWeight: '700', color: '#00D4FF' },
+
+  timerBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  timerBadgeText: { fontSize: 15, color: '#8BA4C0', fontVariant: ['tabular-nums'] },
+
+  // Slider
+  sliderSection: { marginBottom: 16 },
+  sliderHeader:  { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  sliderLabel:   { fontSize: 13, color: '#8BA4C0' },
+  sliderValue:   { fontSize: 14, fontWeight: '700', color: '#00FF9C' },
+  slider:        { width: '100%', height: 36 },
+  sliderRange:   { flexDirection: 'row', justifyContent: 'space-between' },
+  sliderRangeText: { fontSize: 10, color: '#4A6080' },
+
+  // Direction
+  directionRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  dirBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 11,
+    borderRadius: 10, borderWidth: 1, borderColor: '#1E2D4A',
+    backgroundColor: '#0F1629',
   },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e9ecef',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    marginBottom: 16,
-    height: 50,
+  dirBtnActive:  { backgroundColor: '#00FF9C', borderColor: '#00FF9C' },
+  dirBtnReverse: { backgroundColor: '#FFB800', borderColor: '#FFB800' },
+  dirBtnText:    { fontSize: 13, fontWeight: '600', color: '#8BA4C0' },
+
+  // Summary
+  summaryCard: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    backgroundColor: '#0F1629', borderRadius: 14,
+    borderWidth: 1, borderColor: '#1E2D4A',
+    marginBottom: 20, overflow: 'hidden',
   },
-  inputFocused: {
-    borderColor: '#3498db',
-    shadowColor: '#3498db',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 2,
+  summaryItem: {
+    width: '50%', padding: 14,
+    borderRightWidth: 1, borderBottomWidth: 1, borderColor: '#1E2D4A',
   },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#2c3e50',
+  summaryLabel: { fontSize: 10, color: '#4A6080', fontWeight: '700', letterSpacing: 1, marginBottom: 4 },
+  summaryValue: { fontSize: 15, fontWeight: '800' },
+
+  // E-stop
+  estopBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FF3D5A', borderRadius: 12,
+    paddingVertical: 18, gap: 10, marginBottom: 8,
   },
-  rpmUnit: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    marginLeft: 8,
+  estopText: { fontSize: 17, fontWeight: '800', color: 'white' },
+  estopHint: { textAlign: 'center', fontSize: 11, color: '#4A6080', marginBottom: 8 },
+
+  // Modal
+  modalBg:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center' },
+  modalBox: {
+    backgroundColor: '#141D35', borderRadius: 20, padding: 28,
+    alignItems: 'center', width: '86%',
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  toggleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    minWidth: '60%',
-  },
-  toggleButtonOn: {
-    backgroundColor: '#2ecc71',
-  },
-  toggleButtonOff: {
-    backgroundColor: '#3498db',
-  },
-  toggleButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  timerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  timerText: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    marginLeft: 8,
-  },
-  uvStatus: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  uvStatusText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#7f8c8d',
-    marginTop: 8,
-  },
-  emergencySection: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  emergencyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#e74c3c',
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  emergencyText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '700',
-    marginLeft: 8,
-  },
-  emergencyHint: {
-    fontSize: 12,
-    color: '#7f8c8d',
-  },
-  statusCard: {
-    backgroundColor: '#ebebbb',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  statusItem: {
-    alignItems: 'center',
-  },
-  statusLabel: {
-    fontSize: 14,
-    color: '#7f8c8d',
-    marginTop: 4,
-  },
-  statusValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginTop: 2,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 20,
-    padding: 24,
-    alignItems: 'center',
-    width: '85%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#2c3e50',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  modalText: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginHorizontal: 8,
-  },
-  cancelButton: {
-    backgroundColor: '#e9ecef',
-  },
-  confirmButton: {
-    backgroundColor: '#3498db',
-  },
-  emergencyModalButton: {
-    backgroundColor: '#e74c3c',
-  },
-  modalButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: 'white',
-  },
-  sliderContainer: {
-  marginBottom: 16,
-},
-slider: {
-  width: '100%',
-  height: 40,
-},
-sliderLabels: {
-  flexDirection: 'row',
-  justifyContent: 'space-between',
-  marginTop: 8,
-},
-sliderLabel: {
-  fontSize: 12,
-  color: '#7f8c8d',
-},
+  modalTitle:      { fontSize: 20, fontWeight: '700', color: '#E8F4FD', marginTop: 14, marginBottom: 8 },
+  modalText:       { fontSize: 14, color: '#8BA4C0', textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  modalBtns:       { flexDirection: 'row', gap: 12, width: '100%' },
+  modalCancel:     { flex: 1, backgroundColor: '#0F1629', borderRadius: 10, paddingVertical: 13, alignItems: 'center', borderWidth: 1, borderColor: '#1E2D4A' },
+  modalCancelText: { fontSize: 15, fontWeight: '600', color: '#8BA4C0' },
+  modalWarn:       { flex: 1, backgroundColor: '#FFB800', borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
+  modalWarnText:   { fontSize: 15, fontWeight: '700', color: '#0A0E1A' },
+  modalEstop:      { flex: 1, backgroundColor: '#FF3D5A', borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
+  modalEstopText:  { fontSize: 15, fontWeight: '800', color: 'white' },
 });

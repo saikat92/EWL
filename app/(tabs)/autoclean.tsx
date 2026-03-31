@@ -8,278 +8,268 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
-import { sendCommand } from "../mqttService";
+import { DeviceCommands, sendCommand } from '../mqttService';
 
-
-// Vegetable data with cleaning times
-const veggieData = {
-  'Tomato': 3, // 3 minutes
-  'Cucumber': 2, // 2 minutes
-  'Carrot': 2.5, // 2.5 minutes
-  'Lettuce': 3.33, // 3.33 minutes
-  'Bell Pepper': 2.16, // 2.16 minutes
-  'Potato': 4, // 4 minutes
-  'Broccoli': 2.83, // 2.83 minutes
-  'Cauliflower': 3.16, // 3.16 minutes
+// ── Vegetable presets ─────────────────────────────────────────────────────────
+// time in minutes, rpm calculated for 2.5 ft belt
+const VEGGIE_DATA: Record<string, { minutes: number; rpm: number }> = {
+  Tomato:      { minutes: 3.0,  rpm: 60 },
+  Cucumber:    { minutes: 2.0,  rpm: 80 },
+  Carrot:      { minutes: 2.5,  rpm: 70 },
+  Lettuce:     { minutes: 3.33, rpm: 55 },
+  'Bell Pepper':{ minutes: 2.16, rpm: 75 },
+  Potato:      { minutes: 4.0,  rpm: 45 },
+  Broccoli:    { minutes: 2.83, rpm: 62 },
+  Cauliflower: { minutes: 3.16, rpm: 58 },
 };
 
-// Helper function to format time
+// Clamp RPM to Pi hardware range 0–120
+const clampRpm = (v: number) => Math.min(120, Math.max(10, Math.round(v)));
+
 const formatTime = (seconds: number) => {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
 
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function AutoCleanScreen() {
   const [selectedVeggie, setSelectedVeggie] = useState<string>('Tomato');
-  const [running, setRunning] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [showConfirmation, setShowConfirmation] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
-  
-  // Calculate time required based on selected vegetable
-  const timeRequired = veggieData[selectedVeggie as keyof typeof veggieData];
-  
-  // Fixed settings
-  const conveyorLength = 2.5;
-  // const motorRPM = 75;
-  const BELT_LENGTH_INCH = 30;
-  const INCH_PER_RPM = 2;
-  const MIN_RPM = 10;
-  const MAX_RPM = 1000;
+  const [running,        setRunning]        = useState(false);
+  const [countdown,      setCountdown]      = useState(0);
+  const [showConfirm,    setShowConfirm]    = useState(false);
+  const [showSuccess,    setShowSuccess]    = useState(false);
 
-  const motorRPM = (conveyorLength / timeRequired) * 30; // Convert minutes to seconds and calculate RPM
+  const preset     = VEGGIE_DATA[selectedVeggie];
+  const totalSecs  = Math.round(preset.minutes * 60);
+  const motorRpm   = clampRpm(preset.rpm);
 
-    const calculateRPM = (timeMinutes: number): number => {
-    if (timeMinutes <= 0) return MIN_RPM;
-
-    const rpm = (BELT_LENGTH_INCH / timeMinutes) / INCH_PER_RPM;
-
-    return Math.min(Math.max(Math.round(rpm), MIN_RPM), MAX_RPM);
-  };
-
-  const onVegetableChange = (veg: string) => {
-    const time = veggieData[veg as keyof typeof veggieData]; // minutes
-    const rpm = calculateRPM(time);
-
-      // setSelectedVegetable(veg);
-      // setCleaningTime(time);
-      // setMotorRPM(rpm);
-  };
-
-  // Countdown timer effect
+  // ── Countdown timer ───────────────────────────────────────────────────────
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-    if (running && countdown > 0) {
-      timer = setTimeout(() => setCountdown(countdown - 1), 1000);
-    } else if (running && countdown === 0) {
+    if (!running) return;
+    if (countdown <= 0) {
       setRunning(false);
       setShowSuccess(true);
+      // Notify Pi: cleaning complete
+      sendCommand('state', 'Cleaning completes. Collect Packet');
+      DeviceCommands.uvOff();
+      DeviceCommands.conveyorStop();
+      return;
     }
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
   }, [running, countdown]);
 
+  // ── Progress ──────────────────────────────────────────────────────────────
+  const progress = totalSecs > 0 ? (totalSecs - countdown) / totalSecs : 0;
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const startCleaning = () => {
-    setCountdown(timeRequired);
+    setCountdown(totalSecs);
     setRunning(true);
-    setShowConfirmation(false);
-    sendCommand('clean_start', { vegetable: selectedVeggie, duration: countdown, motorRPM });
+    setShowConfirm(false);
+
+    // Send sequence to Pi
+    DeviceCommands.autoCleaning();
+    sendCommand('vegetable', selectedVeggie);
+    sendCommand('duration',  totalSecs);
+    sendCommand('speed',     motorRpm);
+    sendCommand('direction', 'FORWARD');
+    DeviceCommands.uvOn();
+    DeviceCommands.cleaningStart();
   };
 
   const stopCleaning = () => {
     setRunning(false);
-    Alert.alert(
-      "Process Stopped",
-      "The cleaning process has been stopped.",
-      [{ text: "OK" }]
-    );
-    sendCommand('clean_stop');
+    DeviceCommands.conveyorStop();
+    DeviceCommands.uvOff();
+    sendCommand('state', 'paused');
+    Alert.alert('Process Paused', 'Cleaning has been paused.');
   };
 
   const resetProcess = () => {
     setRunning(false);
     setCountdown(0);
     setShowSuccess(false);
-    setShowConfirmation(false);
-    sendCommand('stop');
+    setShowConfirm(false);
+    DeviceCommands.machineOff();
   };
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Header */}
       <View style={styles.header}>
-        <MaterialCommunityIcons name="robot-industrial" size={32} color="#3498db" />
-        <Text style={styles.title}>Auto-Clean Operation</Text>
-        <Text style={styles.subtitle}>Automated cleaning for various vegetables</Text>
+        <MaterialCommunityIcons name="robot-industrial" size={34} color="#00D4FF" />
+        <Text style={styles.title}>Auto-Clean</Text>
+        <Text style={styles.subtitle}>Automated UV disinfection cycle</Text>
       </View>
 
-      {/* Vegetable Selection Card */}
+      {/* Vegetable picker card */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="food-apple" size={24} color="#3498db" />
+          <MaterialCommunityIcons name="food-apple" size={22} color="#00D4FF" />
           <Text style={styles.cardTitle}>Select Vegetable</Text>
         </View>
-        
-        <View style={styles.pickerContainer}>
+
+        <View style={styles.pickerWrap}>
           <Picker
             selectedValue={selectedVeggie}
-            onValueChange={(itemValue) => setSelectedVeggie(itemValue)}
+            onValueChange={(v) => setSelectedVeggie(v)}
             style={styles.picker}
-            dropdownIconColor="#3498db"
+            dropdownIconColor="#00D4FF"
             enabled={!running}
+            itemStyle={{ color: '#E8F4FD' }}
           >
-            {Object.keys(veggieData).map((veg) => (
-              <Picker.Item label={veg} value={veg} key={veg} />
+            {Object.keys(VEGGIE_DATA).map((v) => (
+              <Picker.Item key={v} label={v} value={v} color="#E8F4FD" />
             ))}
           </Picker>
         </View>
-        
-        {/* <View style={styles.veggieInfo}>
-          <MaterialCommunityIcons name="clock" size={20} color="#7f8c8d" />
-          <Text style={styles.infoText}>Cleaning time: {formatTime(timeRequired)}</Text>
-        </View> */}
       </View>
 
-      {/* Settings Card */}
+      {/* Operation settings */}
       <View style={styles.card}>
-        
         <View style={styles.cardHeader}>
-          <MaterialCommunityIcons name="tune" size={24} color="#3498db" />
+          <MaterialCommunityIcons name="tune" size={22} color="#00D4FF" />
           <Text style={styles.cardTitle}>Operation Settings</Text>
         </View>
-        
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Cleaning Time</Text>
-          <Text style={styles.settingValue}>{formatTime(timeRequired)}</Text>
-        </View>
 
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Conveyor Belt Length</Text>
-          <Text style={styles.settingValue}>{conveyorLength} ft</Text>
-        </View>
-        
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>Motor Speed</Text>
-          <Text style={[styles.settingValue, styles.rpmValue]}>{motorRPM} RPM</Text>
-        </View>
-        
-        <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>UV Sterilization</Text>
-          <Text style={styles.settingValue}>Enabled</Text>
-        </View>
+        {[
+          { label: 'Cleaning Time',       value: formatTime(totalSecs),   color: '#FFB800' },
+          { label: 'Motor Speed',         value: `${motorRpm} RPM`,       color: '#00FF9C' },
+          { label: 'UV Sterilization',    value: 'Enabled',               color: '#00D4FF' },
+          { label: 'Conveyor Direction',  value: 'Forward',               color: '#8B5CF6' },
+        ].map((row, i) => (
+          <View key={i} style={[styles.settingRow, i === 3 && { borderBottomWidth: 0 }]}>
+            <Text style={styles.settingLabel}>{row.label}</Text>
+            <Text style={[styles.settingValue, { color: row.color }]}>{row.value}</Text>
+          </View>
+        ))}
       </View>
 
-      {/* Timer Card */}
-      <View style={[styles.card, styles.timerCard]}>
+      {/* Timer card */}
+      <View style={styles.timerCard}>
         <Text style={styles.timerLabel}>TIME REMAINING</Text>
         <Text style={styles.timerText}>{formatTime(countdown)}</Text>
-        
-        <View style={styles.statusRow}>
-          <View style={styles.statusIndicator}>
-            <MaterialCommunityIcons 
-              name={running ? "motion-sensor" : "motion-sensor-off"} 
-              size={20} 
-              color={running ? "#2ecc71" : "#e74c3c"} 
+
+        {/* Progress bar */}
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` as any }]} />
+        </View>
+        <Text style={styles.progressLabel}>
+          {running
+            ? `${Math.round(progress * 100)}% complete`
+            : countdown === 0 && totalSecs > 0
+            ? 'Ready to start'
+            : 'Ready'}
+        </Text>
+
+        {/* Status badges */}
+        <View style={styles.badgeRow}>
+          <View style={[styles.badge, running && styles.badgeActive]}>
+            <MaterialCommunityIcons
+              name={running ? 'motion-sensor' : 'motion-sensor-off'}
+              size={16}
+              color={running ? '#00FF9C' : '#4A6080'}
             />
-            <Text style={styles.statusText}>{running ? "Running" : "Stopped"}</Text>
+            <Text style={[styles.badgeText, running && { color: '#00FF9C' }]}>
+              {running ? 'Running' : 'Stopped'}
+            </Text>
           </View>
-          
-          <View style={styles.statusIndicator}>
-            <MaterialCommunityIcons 
-              name="lightbulb-on" 
-              size={20} 
-              color={running ? "#f1c40f" : "#7f8c8d"} 
+
+          <View style={[styles.badge, running && styles.badgeUV]}>
+            <MaterialCommunityIcons
+              name="lightbulb-on"
+              size={16}
+              color={running ? '#00D4FF' : '#4A6080'}
             />
-            <Text style={styles.statusText}>{running ? "UV On" : "UV Off"}</Text>
+            <Text style={[styles.badgeText, running && { color: '#00D4FF' }]}>
+              {running ? 'UV ON' : 'UV OFF'}
+            </Text>
+          </View>
+
+          <View style={[styles.badge, running && styles.badgeConveyor]}>
+            <MaterialCommunityIcons
+              name="arrow-right-bold"
+              size={16}
+              color={running ? '#8B5CF6' : '#4A6080'}
+            />
+            <Text style={[styles.badgeText, running && { color: '#8B5CF6' }]}>
+              {running ? 'Belt ON' : 'Belt OFF'}
+            </Text>
           </View>
         </View>
       </View>
 
-      {/* Action Buttons */}
-      <View style={styles.buttonContainer}>
-        {!running ? (
-          <TouchableOpacity
-            style={[styles.button, styles.startButton]}
-            onPress={() => setShowConfirmation(true)}
-            disabled={running}
-          >
-            <MaterialCommunityIcons name="play" size={24} color="white" />
-            <Text style={styles.buttonText}>START CLEANING</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.button, styles.stopButton]}
-            onPress={stopCleaning}
-          >
-            <MaterialCommunityIcons name="stop" size={24} color="white" />
-            <Text style={styles.buttonText}>STOP PROCESS</Text>
-          </TouchableOpacity>
-        )}
+      {/* Action buttons */}
+      {!running ? (
+        <TouchableOpacity
+          style={styles.startBtn}
+          onPress={() => setShowConfirm(true)}
+        >
+          <MaterialCommunityIcons name="play-circle" size={24} color="#0A0E1A" />
+          <Text style={styles.startBtnText}>START CLEANING</Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity style={styles.stopBtn} onPress={stopCleaning}>
+          <MaterialCommunityIcons name="pause-circle" size={24} color="white" />
+          <Text style={styles.stopBtnText}>PAUSE PROCESS</Text>
+        </TouchableOpacity>
+      )}
 
-      </View>
-      <View style={styles.buttonContainer}>
-          <TouchableOpacity onPress={resetProcess}
-          style={[styles.button, styles.resetButton]}>
-            <MaterialCommunityIcons name="restart" size={24} color="white" />
-            <Text style={styles.buttonText}>RESET</Text>
-          </TouchableOpacity>
-      </View>
-      {/* Confirmation Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={showConfirmation}
-        onRequestClose={() => setShowConfirmation(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <MaterialCommunityIcons name="robot-confused" size={48} color="#3498db" />
+      <TouchableOpacity style={styles.resetBtn} onPress={resetProcess}>
+        <MaterialCommunityIcons name="restart" size={20} color="#8BA4C0" />
+        <Text style={styles.resetBtnText}>RESET</Text>
+      </TouchableOpacity>
+
+      {/* ── Confirm Modal ── */}
+      <Modal transparent animationType="fade" visible={showConfirm}
+        onRequestClose={() => setShowConfirm(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <MaterialCommunityIcons name="robot-excited" size={52} color="#00D4FF" />
             <Text style={styles.modalTitle}>Confirm Auto-Clean</Text>
             <Text style={styles.modalText}>
-              Start cleaning process for {selectedVeggie}? This will take {formatTime(timeRequired)}.
+              Start UV cleaning cycle for {selectedVeggie}?{'\n'}
+              Duration: {formatTime(totalSecs)}  ·  Speed: {motorRpm} RPM
             </Text>
-            
-            <View style={styles.modalButtons}>
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowConfirmation(false)}
+            <View style={styles.modalBtns}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setShowConfirm(false)}
               >
-                <Text style={styles.modalButtonText}>Cancel</Text>
+                <Text style={styles.modalCancelText}>Cancel</Text>
               </TouchableOpacity>
-              
-              <TouchableOpacity 
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={startCleaning}
-              >
-                <Text style={styles.modalButtonText}>Confirm</Text>
+              <TouchableOpacity style={styles.modalConfirm} onPress={startCleaning}>
+                <Text style={styles.modalConfirmText}>Start</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Success Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={showSuccess}
-        onRequestClose={() => setShowSuccess(false)}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <MaterialCommunityIcons name="check-circle" size={60} color="#2ecc71" />
+      {/* ── Success Modal ── */}
+      <Modal transparent animationType="fade" visible={showSuccess}
+        onRequestClose={() => setShowSuccess(false)}>
+        <View style={styles.modalBg}>
+          <View style={styles.modalBox}>
+            <MaterialCommunityIcons name="check-circle" size={60} color="#00FF9C" />
             <Text style={styles.modalTitle}>Cleaning Complete!</Text>
             <Text style={styles.modalText}>
-              {selectedVeggie} has been cleaned successfully.
+              {selectedVeggie} has been disinfected.{'\n'}Collect your vegetables.
             </Text>
-            
-            <TouchableOpacity 
-              style={[styles.modalButton, styles.successButton]}
-              onPress={() => setShowSuccess(false)}
+            <TouchableOpacity
+              style={[styles.modalConfirm, { width: '100%' }]}
+              onPress={() => { setShowSuccess(false); resetProcess(); }}
             >
-              <Text style={styles.modalButtonText}>OK</Text>
+              <Text style={styles.modalConfirmText}>Done</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -288,219 +278,113 @@ export default function AutoCleanScreen() {
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#BAB86C',
-  },
-  contentContainer: {
-    padding: 16,
-    paddingBottom: 30,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#2c3e50',
-    marginTop: 12,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    marginTop: 8,
-  },
+  container: { flex: 1, backgroundColor: '#0A0E1A' },
+  content:   { padding: 16, paddingBottom: 40 },
+
+  header: { alignItems: 'center', paddingTop: 16, marginBottom: 24 },
+  title:  { fontSize: 26, fontWeight: '800', color: '#E8F4FD', marginTop: 10 },
+  subtitle: { fontSize: 13, color: '#8BA4C0', marginTop: 4 },
+
   card: {
-    backgroundColor: '#ebebbb',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 3,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: '#141D35',
+    borderRadius: 14,
+    padding: 18,
     marginBottom: 16,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2c3e50',
-    marginLeft: 12,
-  },
-  pickerContainer: {
     borderWidth: 1,
-    borderColor: '#e9ecef',
-    borderRadius: 12,
-    marginBottom: 16,
+    borderColor: '#1E2D4A',
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+  cardTitle:  { fontSize: 16, fontWeight: '700', color: '#E8F4FD', marginLeft: 10 },
+
+  pickerWrap: {
+    borderWidth: 1,
+    borderColor: '#1E2D4A',
+    borderRadius: 10,
     overflow: 'hidden',
+    backgroundColor: '#0F1629',
   },
-  picker: {
-    height: 50,
-  },
-  veggieInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  infoText: {
-    marginLeft: 8,
-    fontSize: 14,
-    color: '#7f8c8d',
-  },
+  picker: { height: 52, color: '#E8F4FD' },
+
   settingRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f3f4',
+    borderBottomColor: '#1E2D4A',
   },
-  settingLabel: {
-    fontSize: 16,
-    color: '#2c3e50',
-  },
-  settingValue: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#7f8c8d',
-  },
-  rpmValue: {
-    color: '#3498db',
-    fontWeight: '600',
-  },
+  settingLabel: { fontSize: 14, color: '#8BA4C0' },
+  settingValue: { fontSize: 14, fontWeight: '700' },
+
+  // Timer card
   timerCard: {
-    alignItems: 'center',
-    backgroundColor: '#2c3e50',
-  },
-  timerLabel: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '500',
-    marginBottom: 8,
-    opacity: 0.8,
-  },
-  timerText: {
-    color: 'white',
-    fontSize: 48,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    width: '100%',
-  },
-  statusIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusText: {
-    color: 'white',
-    marginLeft: 8,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  buttonContainer: {
-    marginTop: 8,
-    marginBottom: 24,
-  },
-  button: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  startButton: {
-    backgroundColor: '#556B2F',
-    color: 'white',
-    fontSize: 24,
-  },
-  stopButton: {
-    backgroundColor: '#e74c3c',
-    color: 'white',
-    fontSize: 24,
-  },
-  resetButton: {
-    backgroundColor: '#556B2F',
-    color: 'white',
-    fontSize: 24,
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 10,
-  },
-  modalContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 20,
+    backgroundColor: '#0F1629',
+    borderRadius: 14,
     padding: 24,
+    marginBottom: 20,
     alignItems: 'center',
-    width: '85%',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#1E2D4A',
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#2c3e50',
-    marginTop: 16,
-    marginBottom: 8,
+  timerLabel: { fontSize: 11, fontWeight: '700', color: '#4A6080', letterSpacing: 2, marginBottom: 8 },
+  timerText:  { fontSize: 56, fontWeight: '800', color: '#00D4FF', fontVariant: ['tabular-nums'] },
+
+  progressTrack: {
+    width: '100%', height: 4, backgroundColor: '#1E2D4A',
+    borderRadius: 2, marginTop: 16, marginBottom: 6, overflow: 'hidden',
   },
-  modalText: {
-    fontSize: 16,
-    color: '#7f8c8d',
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
+  progressFill:  { height: '100%', backgroundColor: '#00D4FF', borderRadius: 2 },
+  progressLabel: { fontSize: 11, color: '#4A6080', marginBottom: 16 },
+
+  badgeRow: { flexDirection: 'row', gap: 8 },
+  badge: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#141D35', borderRadius: 20,
+    paddingVertical: 6, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: '#1E2D4A', gap: 5,
   },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
+  badgeActive:   { borderColor: '#00FF9C', backgroundColor: 'rgba(0,255,156,0.08)' },
+  badgeUV:       { borderColor: '#00D4FF', backgroundColor: 'rgba(0,212,255,0.08)' },
+  badgeConveyor: { borderColor: '#8B5CF6', backgroundColor: 'rgba(139,92,246,0.08)' },
+  badgeText:     { fontSize: 11, fontWeight: '600', color: '#4A6080' },
+
+  // Buttons
+  startBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#00D4FF', borderRadius: 12,
+    paddingVertical: 16, marginBottom: 12, gap: 10,
   },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginHorizontal: 8,
+  startBtnText: { fontSize: 16, fontWeight: '800', color: '#0A0E1A' },
+
+  stopBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FF3D5A', borderRadius: 12,
+    paddingVertical: 16, marginBottom: 12, gap: 10,
   },
-  cancelButton: {
-    backgroundColor: '#e9ecef',
+  stopBtnText: { fontSize: 16, fontWeight: '800', color: 'white' },
+
+  resetBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#141D35', borderRadius: 12,
+    paddingVertical: 13, marginBottom: 8, gap: 8,
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  confirmButton: {
-    backgroundColor: '#3498db',
+  resetBtnText: { fontSize: 14, fontWeight: '600', color: '#8BA4C0' },
+
+  // Modal
+  modalBg:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center' },
+  modalBox: {
+    backgroundColor: '#141D35', borderRadius: 20, padding: 28,
+    alignItems: 'center', width: '86%',
+    borderWidth: 1, borderColor: '#1E2D4A',
   },
-  successButton: {
-    backgroundColor: '#2ecc71',
-    width: '100%',
-  },
-  modalButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: 'white',
-  },
+  modalTitle:       { fontSize: 20, fontWeight: '700', color: '#E8F4FD', marginTop: 14, marginBottom: 8 },
+  modalText:        { fontSize: 14, color: '#8BA4C0', textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  modalBtns:        { flexDirection: 'row', gap: 12, width: '100%' },
+  modalCancel:      { flex: 1, backgroundColor: '#0F1629', borderRadius: 10, paddingVertical: 13, alignItems: 'center', borderWidth: 1, borderColor: '#1E2D4A' },
+  modalCancelText:  { fontSize: 15, fontWeight: '600', color: '#8BA4C0' },
+  modalConfirm:     { flex: 1, backgroundColor: '#00D4FF', borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
+  modalConfirmText: { fontSize: 15, fontWeight: '700', color: '#0A0E1A' },
 });
