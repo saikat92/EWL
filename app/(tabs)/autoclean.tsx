@@ -15,14 +15,14 @@ import { DeviceCommands, sendCommand } from '../mqttService';
 // ── Vegetable presets ─────────────────────────────────────────────────────────
 // time in minutes, rpm calculated for 2.5 ft belt
 const VEGGIE_DATA: Record<string, { minutes: number; rpm: number }> = {
-  Tomato:      { minutes: 3.0,  rpm: 60 },
-  Cucumber:    { minutes: 2.0,  rpm: 80 },
-  Carrot:      { minutes: 2.5,  rpm: 70 },
-  Lettuce:     { minutes: 3.33, rpm: 55 },
-  'Bell Pepper':{ minutes: 2.16, rpm: 75 },
+  Tomato:      { minutes: 10.0,  rpm: 60 },
+  Cucumber:    { minutes: 12.0,  rpm: 80 },
+  Pumpkin:      { minutes: 10.5,  rpm: 70 },
+  Bringle:     { minutes: 8.0, rpm: 55 },
+  'Pointed Gourd':{ minutes: 2.16, rpm: 75 },
   Potato:      { minutes: 4.0,  rpm: 45 },
-  Broccoli:    { minutes: 2.83, rpm: 62 },
-  Cauliflower: { minutes: 3.16, rpm: 58 },
+  'Green Chilly':    { minutes: 6.0, rpm: 62 },
+  'Ridge Gourd': { minutes: 8.0, rpm: 58 },
 };
 
 // Clamp RPM to Pi hardware range 0–120
@@ -125,10 +125,10 @@ export default function AutoCleanScreen() {
             style={styles.picker}
             dropdownIconColor="#00D4FF"
             enabled={!running}
-            itemStyle={{ color: '#E8F4FD' }}
+            itemStyle={{ color: '#ffffff' }}
           >
             {Object.keys(VEGGIE_DATA).map((v) => (
-              <Picker.Item key={v} label={v} value={v} color="#E8F4FD" />
+              <Picker.Item key={v} label={v} value={v} color="#051b2c" />
             ))}
           </Picker>
         </View>
